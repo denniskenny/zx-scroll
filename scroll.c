@@ -2,6 +2,7 @@
 #include <arch/spectrum.h>
 #include <intrinsic.h>
 #include <string.h>
+#include "map_data.h"
 
 #define KEMPSTON_PORT 0x1F
 #define KEMPSTON_RIGHT 0x01
@@ -41,6 +42,7 @@ static unsigned char kbd_read_row(unsigned int port) __naked {
 #define TILE_COUNT 4
 
 void draw_map(void);
+void load_map(void);
 void init_map(void);
 
 // Simple 2-color tile graphics (8 bytes per tile)
@@ -55,7 +57,7 @@ const unsigned char tiles[] = {
     0xFF, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0xFF
 };
 
-// Larger map data (generated at runtime)
+// Map data from external file (embedded)
 unsigned char map_data[MAP_WIDTH * MAP_HEIGHT];
 
 int camera_x = 0;
@@ -201,12 +203,17 @@ void draw_map(void) {
     }
 }
 
+// Load map data from embedded array
+void load_map(void) {
+    memcpy(map_data, map_bin, MAP_WIDTH * MAP_HEIGHT);
+}
+
 int main(void) {
     // Set up the display
     zx_border(INK_BLACK);
     zx_cls(PAPER_WHITE | INK_BLACK);
 
-    init_map();
+    load_map();
 
     draw_map();
     
