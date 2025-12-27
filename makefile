@@ -3,7 +3,7 @@ CC=$(Z88DK_DIR)/bin/zcc
 ZCCCFG=$(Z88DK_DIR)/lib/config
 FUSE_APP=Fuse
 
-CFLAGS=+zx -vn -SO3 -zorg=32768 -startup=31 -clib=sdcc_iy
+CFLAGS=+zx -vn -SO3 -zorg=32768 -startup=31 --opt-code-speed -compiler=sdcc -clib=sdcc_iy -mz80
 LDFLAGS=-lm -create-app
 
 all: scrollFuse
