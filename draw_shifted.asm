@@ -55,75 +55,74 @@ _draw_shifted_asm:
     ld l, (ix+6)
     ld h, (ix+7)         ; HL = map_row
 
+    ; Cache tiles_row pointer bytes (avoid repeated IX-indexed loads in loop)
+    ld a, (ix+8)
+    ld (tiles_row_lo), a
+    ld a, (ix+9)
+    ld (tiles_row_hi), a
+
     ; Process 16 output bytes
     ld b, 16
      
  tile_loop:
-    ; Save map pointer only (DE output and B counter stay live)
-    push hl
+     ; Load left index, then right index; keep right index in A'
+     ld a, (hl)           ; left index
+     inc hl
+     ex af, af'
+     ld a, (hl)           ; right index
+     push hl              ; save map_ptr (already at map[i+1]) for next iteration
+     ex af, af'           ; A = left index, A' = right index
  
-    ; Left tile index and byte
-    ld a, (hl)
-    add a, a
-    add a, a
-    add a, a             ; tile * 8
-    ld c, a
-    ld a, (ix+8)         ; tiles_row low
-    add a, c
-    ld l, a
-    ld a, (ix+9)         ; tiles_row high
-    adc a, 0
-    ld h, a
-    ld a, (hl)
+     ; ---- LEFT tile: compute shifted left byte into C ----
+     add a, a
+     add a, a
+     add a, a             ; A = tile * 8
+     ld l, a              ; L = tile*8 (temp)
+     ld a, (tiles_row_lo)
+     add a, l             ; tiles_row low + tile*8
+     ld l, a
+     ld a, (tiles_row_hi)
+     adc a, 0
+     ld h, a
+     ld a, (hl)           ; A = left tile byte
  
-    ; lshift lookup
-    ld hl, (lshift_addr)
-    add a, l
-    ld l, a
-    jr nc, no_carry_left
-    inc h
+     ld hl, (lshift_addr)
+     add a, l
+     ld l, a
+     jr nc, no_carry_left
+     inc h
  no_carry_left:
-    ld a, (hl)
-    ld (left_byte), a
+     ld a, (hl)           ; A = shifted left byte
+     ld c, a              ; C = shifted left byte
  
-    ; Restore map pointer and get right tile index
-    pop hl
-    inc hl
-    push hl              ; save map pointer for next iteration
-    ld a, (hl)
+     ; ---- RIGHT tile: compute shifted right byte into A ----
+     ex af, af'           ; A = right index
+     add a, a
+     add a, a
+     add a, a             ; A = tile * 8
+     ld l, a              ; L = tile*8 (temp)
+     ld a, (tiles_row_lo)
+     add a, l             ; tiles_row low + tile*8
+     ld l, a
+     ld a, (tiles_row_hi)
+     adc a, 0
+     ld h, a
+     ld a, (hl)           ; A = right tile byte
  
-    ; Right tile byte
-    add a, a
-    add a, a
-    add a, a
-    ld c, a
-    ld a, (ix+8)
-    add a, c
-    ld l, a
-    ld a, (ix+9)
-    adc a, 0
-    ld h, a
-    ld a, (hl)
- 
-    ; rshift lookup
-    ld hl, (rshift_addr)
-    add a, l
-    ld l, a
-    jr nc, no_carry_right
-    inc h
+     ld hl, (rshift_addr)
+     add a, l
+     ld l, a
+     jr nc, no_carry_right
+     inc h
  no_carry_right:
-    ld a, (hl)
-    ld (right_byte), a
+     ld a, (hl)           ; A = shifted right byte
  
-    ; Combine and store
-    ld a, (left_byte)
-    ld c, a
-    ld a, (right_byte)
-    or c
-    ld (de), a
-    inc de
+     ; Combine and store
+     or c
+     ld (de), a
+     inc de
  
-    pop hl               ; HL already at map[i+1]
+     pop hl               ; restore map_ptr (map[i+1])
  
     djnz tile_loop
 
@@ -131,16 +130,16 @@ _draw_shifted_asm:
     pop ix
     ret
 
-; Temporary storage
-    SECTION bss_user
-left_byte:
-    DEFS 1
-right_byte:
-    DEFS 1
-lshift_addr:
-    DEFS 2
-rshift_addr:
-    DEFS 2
+ ; Temporary storage
+     SECTION bss_user
+ tiles_row_lo:
+     DEFS 1
+ tiles_row_hi:
+     DEFS 1
+ lshift_addr:
+     DEFS 2
+ rshift_addr:
+     DEFS 2
 
 ; Lookup table addresses
     SECTION rodata_user
