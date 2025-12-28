@@ -132,26 +132,28 @@ int main(void) {
             input_active = 1;
         }
 
-        // QAOP keyboard
-        unsigned char row_qwert = kbd_read_row(0xFEFE); // Q row
-        unsigned char row_asdfg = kbd_read_row(0xFDFE); // A row
-        unsigned char row_poiuy = kbd_read_row(0xF7FE); // O/P row
+        if (!input_active) {
+            // QAOP keyboard
+            unsigned char row_qwert = kbd_read_row(0xFEFE); // Q row
+            unsigned char row_asdfg = kbd_read_row(0xFDFE); // A row
+            unsigned char row_poiuy = kbd_read_row(0xF7FE); // O/P row
 
-        if ((row_qwert & 0x01) == 0) { // Q
-            dy -= 1;
-            input_active = 1;
-        }
-        if ((row_asdfg & 0x01) == 0) { // A
-            dy += 1;
-            input_active = 1;
-        }
-        if ((row_poiuy & 0x01) == 0) { // O
-            dx -= 1;
-            input_active = 1;
-        }
-        if ((row_poiuy & 0x02) == 0) { // P
-            dx += 1;
-            input_active = 1;
+            if ((row_qwert & 0x01) == 0) { // Q
+                dy -= 1;
+                input_active = 1;
+            }
+            if ((row_asdfg & 0x01) == 0) { // A
+                dy += 1;
+                input_active = 1;
+            }
+            if ((row_poiuy & 0x01) == 0) { // O
+                dx -= 1;
+                input_active = 1;
+            }
+            if ((row_poiuy & 0x02) == 0) { // P
+                dx += 1;
+                input_active = 1;
+            }
         }
 
         int prev_x = camera_x;

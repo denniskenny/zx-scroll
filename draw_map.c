@@ -58,9 +58,19 @@ next_row_aligned:
             // Compute tiles_row for this scanline
             const unsigned char *tiles_row = tiles_base + in_tile_y;
             
+            if (!(map_ptr[0] | map_ptr[1] | map_ptr[2] | map_ptr[3] |
+                  map_ptr[4] | map_ptr[5] | map_ptr[6] | map_ptr[7] |
+                  map_ptr[8] | map_ptr[9] | map_ptr[10] | map_ptr[11] |
+                  map_ptr[12] | map_ptr[13] | map_ptr[14] | map_ptr[15] |
+                  map_ptr[16])) {
+                memset(row_ptr, 0, 16);
+                goto next_row_shifted;
+            }
+            
             // Use assembly-optimized shifted drawing
             draw_shifted_asm(row_ptr, map_ptr, tiles_row, shift);
 
+next_row_shifted:
             if (++in_tile_y == 8) {
                 in_tile_y = 0;
                 map_ptr += map_stride;
