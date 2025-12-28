@@ -1,5 +1,4 @@
 ; draw_shifted.asm - Shifted tile drawing with lookup table optimization
-; Uses lshift lookup tables for left shifts, loop for right shifts
 
     SECTION code_user
 
@@ -14,7 +13,7 @@ _draw_shifted_asm:
     add ix, sp
     
     di
-    
+
     ; Compute lshift table address from shift value (1-7)
     ld a, (ix+10)        ; shift (1-7)
     dec a                ; 0-6 for indexing
@@ -24,7 +23,7 @@ _draw_shifted_asm:
     ld l, a
     jr nc, no_carry_l
     inc h
-no_carry_l:
+ no_carry_l:
     ld a, (hl)
     inc hl
     ld h, (hl)
@@ -33,9 +32,9 @@ no_carry_l:
     
     ; Compute rshift table address (rshift = 8 - shift)
     ld a, (ix+10)        ; shift
-    ld b, a
+    ld c, a
     ld a, 8
-    sub b                ; rshift = 8 - shift (1-7)
+    sub c                ; rshift = 8 - shift (1-7)
     dec a                ; 0-6 for indexing
     add a, a             ; *2 for word index
     ld hl, rshift_table_addrs
@@ -43,7 +42,7 @@ no_carry_l:
     ld l, a
     jr nc, no_carry_r
     inc h
-no_carry_r:
+ no_carry_r:
     ld a, (hl)
     inc hl
     ld h, (hl)
@@ -55,17 +54,16 @@ no_carry_r:
     ld d, (ix+5)         ; DE = output row
     ld l, (ix+6)
     ld h, (ix+7)         ; HL = map_row
-    
+
     ; Process 16 output bytes
     ld b, 16
-    
-tile_loop:
-    push bc              ; Save counter
-    push de              ; Save output pointer
-    push hl              ; Save map pointer
-    
-    ; Get left tile index and compute address
-    ld a, (hl)           ; tile index
+     
+ tile_loop:
+    ; Save map pointer only (DE output and B counter stay live)
+    push hl
+ 
+    ; Left tile index and byte
+    ld a, (hl)
     add a, a
     add a, a
     add a, a             ; tile * 8
@@ -75,59 +73,60 @@ tile_loop:
     ld l, a
     ld a, (ix+9)         ; tiles_row high
     adc a, 0
-    ld h, a              ; HL = tiles_row + tile*8
-    ld a, (hl)           ; A = left tile byte
-    
-    ; Lookup left shift using table
+    ld h, a
+    ld a, (hl)
+ 
+    ; lshift lookup
     ld hl, (lshift_addr)
     add a, l
     ld l, a
     jr nc, no_carry_left
     inc h
-no_carry_left:
-    ld a, (hl)           ; A = shifted left byte
-    ld (left_byte), a    ; Store temporarily
-    
-    ; Get right tile index
-    pop hl               ; Restore map pointer
-    push hl              ; Save it again
-    inc hl               ; Point to next tile
-    ld a, (hl)           ; right tile index
+ no_carry_left:
+    ld a, (hl)
+    ld (left_byte), a
+ 
+    ; Restore map pointer and get right tile index
+    pop hl
+    inc hl
+    push hl              ; save map pointer for next iteration
+    ld a, (hl)
+ 
+    ; Right tile byte
     add a, a
     add a, a
-    add a, a             ; tile * 8
+    add a, a
     ld c, a
-    ld a, (ix+8)         ; tiles_row low
+    ld a, (ix+8)
     add a, c
     ld l, a
-    ld a, (ix+9)         ; tiles_row high
+    ld a, (ix+9)
     adc a, 0
-    ld h, a              ; HL = tiles_row + tile*8
-    ld a, (hl)           ; A = right tile byte
-    
-    ; Lookup right shift using table
+    ld h, a
+    ld a, (hl)
+ 
+    ; rshift lookup
     ld hl, (rshift_addr)
     add a, l
     ld l, a
     jr nc, no_carry_right
     inc h
-no_carry_right:
-    ld b, (hl)           ; B = shifted right byte
-    
-    ; Combine: (left << shift) | (right >> rshift)
+ no_carry_right:
+    ld a, (hl)
+    ld (right_byte), a
+ 
+    ; Combine and store
     ld a, (left_byte)
-    or b
-    
-    ; Store result
-    pop hl               ; Restore map pointer
-    inc hl               ; Advance to next tile for next iteration
-    pop de               ; Restore output pointer
-    ld (de), a           ; Store result
-    inc de               ; Advance output
-    
-    pop bc               ; Restore counter
+    ld c, a
+    ld a, (right_byte)
+    or c
+    ld (de), a
+    inc de
+ 
+    pop hl               ; HL already at map[i+1]
+ 
     djnz tile_loop
-    
+
     ei
     pop ix
     ret
@@ -135,6 +134,8 @@ no_carry_right:
 ; Temporary storage
     SECTION bss_user
 left_byte:
+    DEFS 1
+right_byte:
     DEFS 1
 lshift_addr:
     DEFS 2

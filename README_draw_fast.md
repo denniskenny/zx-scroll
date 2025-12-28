@@ -68,13 +68,11 @@ Where `rshift = 8 - shift`.
 
 | Register | Purpose |
 |----------|---------|
-| HL | Map row pointer (main) |
-| DE | Output buffer pointer (main) |
-| C | Temporary shifted left byte (main) |
-| BC' | tiles_row base address (alternate) |
-| D' | Left shift table high byte (alternate) |
-| E' | Right shift table high byte (alternate) |
-| HL' | Tile/table address calculation (alternate) |
+| IX | Frame pointer for parameter access |
+| HL | Map row pointer / tile address calculation |
+| DE | Output buffer pointer |
+| BC | Loop counter / temporary |
+| A | Tile index / byte values |
 
 ### Optimizations
 
@@ -93,9 +91,13 @@ shift_loop:
     jr nz, shift_loop
 
 ; New method (table lookup - constant time):
-ld l, (hl)       ; L = byte to shift
-ld h, d          ; H = lshift_N table high byte
-ld a, (hl)       ; A = shifted result (instant!)
+ld hl, (lshift_addr)  ; HL = precomputed table address
+add a, l              ; Add byte to shift to table base
+ld l, a
+jr nc, no_carry
+inc h
+no_carry:
+ld a, (hl)            ; A = shifted result (instant!)
 ```
 **Saves**: ~20 T-states per shift (avg 4 iterations × 15T = 60T → 14T)
 
@@ -104,25 +106,32 @@ ld a, (hl)       ; A = shifted result (instant!)
 - `_lshift_1` to `_lshift_7`: `table[x] = (x << N) & 0xFF`
 - `_rshift_1` to `_rshift_7`: `table[x] = x >> N`
 
-High bytes stored in lookup tables for fast access:
+Full addresses stored in lookup tables for reliable access:
 ```asm
-_lshift_table_hi:
-    DEFB _lshift_1 / 256, _lshift_2 / 256, ... _lshift_7 / 256
-_rshift_table_hi:
-    DEFB _rshift_1 / 256, _rshift_2 / 256, ... _rshift_7 / 256
+lshift_table_addrs:
+    DEFW _lshift_1, _lshift_2, ... _lshift_7
+rshift_table_addrs:
+    DEFW _rshift_1, _rshift_2, ... _rshift_7
 ```
 
-#### 4. No Push/Pop in Tile Code
-BC' holds tiles_row permanently, D'/E' hold table high bytes.
-**Saves**: ~480 T-states (32 push/pop eliminated)
+Table addresses are computed once at function entry and stored in BSS:
+```asm
+lshift_addr:  DEFS 2    ; Precomputed lshift table address
+rshift_addr:  DEFS 2    ; Precomputed rshift table address
+```
+
+#### 4. Precomputed Table Addresses
+Table addresses computed once at function entry, stored in BSS for fast access.
+**Benefit**: Avoids recalculating table base each tile
 
 #### 5. Efficient Address Calculation
 ```asm
-add a, c         ; tiles_row_low + (tile * 8)
+ld a, (ix+8)     ; tiles_row low
+add a, c         ; + (tile * 8)
 ld l, a
-ld a, b
+ld a, (ix+9)     ; tiles_row high
 adc a, 0
-ld h, a          ; HL' = tiles_row + tile*8
+ld h, a          ; HL = tiles_row + tile*8
 ```
 
 ### Performance
@@ -130,22 +139,20 @@ ld h, a          ; HL' = tiles_row + tile*8
 #### Per-Tile Timing (with lookup tables)
 | Operation | T-states |
 |-----------|----------|
-| ld a, (hl) | 7 |
-| add a,a ×3 | 12 |
-| address calc | 18 |
-| ld l, (hl) | 7 |
-| ld h, d | 4 |
-| ld a, (hl) | 7 |
-| exx ×2 | 8 |
-| **Left tile** | **~63** |
-| **Right tile** | **~63** |
-| or c, ld (de), a | 11 |
-| **Total per tile** | **~74** |
+| Get tile index | 7 |
+| Multiply by 8 (add a,a ×3) | 12 |
+| Address calc (tiles_row + offset) | ~25 |
+| Load tile byte | 7 |
+| Table lookup (ld hl, add, ld) | ~30 |
+| **Left tile total** | **~81** |
+| **Right tile total** | **~81** |
+| Combine (or) + store | 11 |
+| **Total per output byte** | **~90** |
 
 #### Per-Row Estimate
-- 16 tiles × ~74 T = **~1184 T-states per row**
-- Previous loop-shift version: ~1600 T-states
-- **Speedup: ~26% faster**
+- 16 output bytes × ~90 T = **~1440 T-states per row**
+- Loop-based shift version: ~1800 T-states (variable)
+- **Speedup: ~20% faster with consistent timing**
 
 #### Memory Cost
 - 14 tables × 256 bytes = **3,584 bytes**

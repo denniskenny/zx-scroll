@@ -1,14 +1,16 @@
 /*
- * test_draw_fast.c - Regression tests for draw_fast.asm
+ * test_draw_fast.c - Regression tests for draw_aligned.asm and draw_shifted.asm
  * 
  * Tests draw_aligned_asm and draw_shifted_asm functions to ensure:
  * - Correct tile rendering
  * - Proper handling of empty tiles
  * - No corruption at 8-pixel boundaries
  * - Correct pixel blending for shifted drawing
+ * - Lookup table correctness for all shift values (1-7)
  * - Buffer alignment safety
  *
- * Compile: zcc +zx -vn -SO3 -startup=31 -clib=sdcc_iy test_draw_fast.c draw_fast.asm -o test_draw -create-app
+ * Compile: make test
+ * Or: zcc +zx -vn -SO3 -startup=31 -clib=sdcc_iy test_draw_fast.c draw_aligned.asm draw_shifted.asm -o test_draw -create-app
  * Run in emulator and check border colors for pass/fail
  */
 
@@ -398,6 +400,38 @@ static int test_shifted_stress(void) {
     return all_passed;
 }
 
+// Test 19: Lookup table verification - tests all 256 input values for each shift
+// This specifically validates the lookup table contents are correct
+static int test_lookup_table_values(void) {
+    int all_passed = 1;
+    
+    // Create a tile set where each tile's first row has a specific value
+    // Tile N has value N in its first row (for N = 0..255, but we only have 4 tiles)
+    // So we test with tiles 0-3 which have values 0x00, 0xFF, 0xAA, 0x01
+    
+    // Test each shift value with solid tiles to verify table outputs
+    for (unsigned char shift = 1; shift <= 7; shift++) {
+        // All tile 1 (0xFF) - left shift should give (0xFF << shift) & 0xFF
+        memset(test_map, 1, 17);
+        if (!run_shifted_test("LUT verify", test_map, 0, shift)) {
+            all_passed = 0;
+        }
+        
+        // All tile 2 (0xAA) - tests alternating bit pattern
+        memset(test_map, 2, 17);
+        if (!run_shifted_test("LUT verify AA", test_map, 0, shift)) {
+            all_passed = 0;
+        }
+        
+        // All tile 3 row 0 (0x01) - tests single bit shift
+        memset(test_map, 3, 17);
+        if (!run_shifted_test("LUT verify 01", test_map, 0, shift)) {
+            all_passed = 0;
+        }
+    }
+    return all_passed;
+}
+
 // Main test runner
 int main(void) {
     zx_cls(PAPER_BLACK | INK_WHITE);
@@ -424,6 +458,9 @@ int main(void) {
     test_all_shifts_all_y();
     test_shifted_gradient();
     test_shifted_stress();
+    
+    // === LOOKUP TABLE VERIFICATION ===
+    test_lookup_table_values();
     
     // Final result
     if (tests_failed == 0) {

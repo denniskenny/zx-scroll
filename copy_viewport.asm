@@ -1,5 +1,10 @@
 ; copy_viewport.asm - Fast screen copy for ZX Spectrum scroller
 ; Copies 128x128 pixel viewport from offscreen buffer to centered screen position
+;
+; Optimizations:
+; - Unrolled LDI (16T each) instead of LDIR (21T each)
+; - Alternate registers for table pointer
+; - 2x loop unrolling (process 2 lines per iteration)
 
     SECTION code_user
 
@@ -7,56 +12,77 @@
 
     EXTERN _offscreen_buffer
 
-; Screen position: centered 128x128 viewport
-; view_offset_x = ((32-16)/2) * 8 = 64 pixels = 8 bytes
-; view_offset_y = ((24-16)/2) * 8 = 32 pixels
-; So we copy to screen Y=32..159, X_byte=8
-
 ; void copy_viewport_to_screen(void)
 _copy_viewport_to_screen:
-    di                      ; Disable interrupts for speed
+    di
     
-    ld hl, _offscreen_buffer ; Source: linear buffer
-    ld de, scr_addr_table   ; Screen address lookup table
-    ld b, 128               ; 128 scanlines
+    ld hl, _offscreen_buffer
+    exx
+    ld hl, scr_addr_table   ; HL' = table pointer
+    exx
+    ld b, 64                ; 64 iterations × 2 lines = 128 lines
     
 copy_loop:
-    push bc
-    push hl
+    ; === Line 1 ===
+    exx
+    ld e, (hl)
+    inc hl
+    ld d, (hl)
+    inc hl
+    push de
+    exx
+    pop de
     
-    ; Get screen address from table
-    ld a, (de)
-    ld c, a
-    inc de
-    ld a, (de)
-    ld b, a
-    inc de
+    ldi
+    ldi
+    ldi
+    ldi
+    ldi
+    ldi
+    ldi
+    ldi
+    ldi
+    ldi
+    ldi
+    ldi
+    ldi
+    ldi
+    ldi
+    ldi
     
-    ; BC = screen address, HL = source
-    ; Copy 16 bytes using LDIR
-    ld a, b
-    ld b, 0                 ; BC was screen addr, need BC=16 for LDIR
-    push de                 ; Save table pointer
-    ld d, a                 ; DE = screen address
-    ld e, c
+    ; === Line 2 ===
+    exx
+    ld e, (hl)
+    inc hl
+    ld d, (hl)
+    inc hl
+    push de
+    exx
+    pop de
     
-    ; Now: HL = source, DE = screen dest
-    ld bc, 16
-    ldir                    ; Copy 16 bytes
+    ldi
+    ldi
+    ldi
+    ldi
+    ldi
+    ldi
+    ldi
+    ldi
+    ldi
+    ldi
+    ldi
+    ldi
+    ldi
+    ldi
+    ldi
+    ldi
     
-    pop de                  ; Restore table pointer
-    pop hl                  ; Restore source base
-    ld bc, 16
-    add hl, bc              ; Advance source by 16 bytes
-    
-    pop bc
     djnz copy_loop
     
     ei
     ret
 
 ; Screen address lookup table for Y=32..159, X_byte=8
-; ZX Spectrum screen: high = 0x40 | ((Y&0xC0)>>3) | (Y&7), low = ((Y&0x38)<<2) | X_byte
     SECTION rodata_user
 
 scr_addr_table:
