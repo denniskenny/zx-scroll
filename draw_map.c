@@ -52,12 +52,10 @@ next_row_aligned:
     } else {
         // Shifted path: blend two tiles using assembly
         register unsigned char shift = in_tile_x;
+        const unsigned char *tiles_row = tiles_base + in_tile_y;
 
         unsigned char py = 128;
         do {
-            // Compute tiles_row for this scanline
-            const unsigned char *tiles_row = tiles_base + in_tile_y;
-            
             if (!(map_ptr[0] | map_ptr[1] | map_ptr[2] | map_ptr[3] |
                   map_ptr[4] | map_ptr[5] | map_ptr[6] | map_ptr[7] |
                   map_ptr[8] | map_ptr[9] | map_ptr[10] | map_ptr[11] |
@@ -73,7 +71,10 @@ next_row_aligned:
 next_row_shifted:
             if (++in_tile_y == 8) {
                 in_tile_y = 0;
+                tiles_row = tiles_base;
                 map_ptr += map_stride;
+            } else {
+                tiles_row++;
             }
             row_ptr += 16;
         } while (--py);

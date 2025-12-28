@@ -29,7 +29,7 @@ _draw_shifted_asm:
     ld h, (hl)
     ld l, a              ; HL = lshift table address
     ld (lshift_addr), hl
-    
+     
     ; Compute rshift table address (rshift = 8 - shift)
     ld a, (ix+10)        ; shift
     ld c, a
@@ -62,9 +62,23 @@ _draw_shifted_asm:
     ld (tiles_row_hi), a
 
     ; Process 16 output bytes
-    ld b, 16
+    ld b, 8
      
  tile_loop:
+     ld a, (hl)
+     inc hl
+     ld c, (hl)
+     dec hl
+     ld a, c
+     or (hl)
+     jr nz, do_byte1
+     inc hl
+     xor a
+     ld (de), a
+     inc de
+     jr byte1_done
+
+ do_byte1:
      ; Load left index, then right index; keep right index in A'
      ld a, (hl)           ; left index
      inc hl
@@ -85,14 +99,15 @@ _draw_shifted_asm:
      adc a, 0
      ld h, a
      ld a, (hl)           ; A = left tile byte
- 
+
+     ; lshift lookup using page-aligned table: HL = lshift_addr, A = byte
      ld hl, (lshift_addr)
      add a, l
      ld l, a
      jr nc, no_carry_left
      inc h
  no_carry_left:
-     ld a, (hl)           ; A = shifted left byte
+     ld a, (hl)
      ld c, a              ; C = shifted left byte
  
      ; ---- RIGHT tile: compute shifted right byte into A ----
@@ -108,14 +123,15 @@ _draw_shifted_asm:
      adc a, 0
      ld h, a
      ld a, (hl)           ; A = right tile byte
- 
+
+     ; rshift lookup using page-aligned table: HL = rshift_addr, A = byte
      ld hl, (rshift_addr)
      add a, l
      ld l, a
      jr nc, no_carry_right
      inc h
  no_carry_right:
-     ld a, (hl)           ; A = shifted right byte
+     ld a, (hl)
  
      ; Combine and store
      or c
@@ -123,8 +139,82 @@ _draw_shifted_asm:
      inc de
  
      pop hl               ; restore map_ptr (map[i+1])
- 
-    djnz tile_loop
+
+ byte1_done:
+
+     ld a, (hl)
+     inc hl
+     ld c, (hl)
+     dec hl
+     ld a, c
+     or (hl)
+     jr nz, do_byte2
+     inc hl
+     xor a
+     ld (de), a
+     inc de
+     jr byte2_done
+
+ do_byte2:
+     ld a, (hl)
+     inc hl
+     ex af, af'
+     ld a, (hl)
+     push hl
+     ex af, af'
+
+     add a, a
+     add a, a
+     add a, a
+     ld l, a
+     ld a, (tiles_row_lo)
+     add a, l
+     ld l, a
+     ld a, (tiles_row_hi)
+     adc a, 0
+     ld h, a
+     ld a, (hl)
+
+     ld hl, (lshift_addr)
+     add a, l
+     ld l, a
+     jr nc, no_carry_left2
+     inc h
+ no_carry_left2:
+     ld a, (hl)
+     ld c, a
+
+     ex af, af'
+     add a, a
+     add a, a
+     add a, a
+     ld l, a
+     ld a, (tiles_row_lo)
+     add a, l
+     ld l, a
+     ld a, (tiles_row_hi)
+     adc a, 0
+     ld h, a
+     ld a, (hl)
+
+     ld hl, (rshift_addr)
+     add a, l
+     ld l, a
+     jr nc, no_carry_right2
+     inc h
+ no_carry_right2:
+     ld a, (hl)
+
+     or c
+     ld (de), a
+     inc de
+
+     pop hl
+
+ byte2_done:
+
+    dec b
+    jp nz, tile_loop
 
     ei
     pop ix
