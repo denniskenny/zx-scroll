@@ -98,6 +98,10 @@ void load_map(void) {
 }
 
 int main(void) {
+    const signed char speed = 4;
+    const int max_x_aligned = (MAP_WIDTH - 16) * TILE_WIDTH;
+    const int max_y_aligned = (MAP_HEIGHT - 16) * TILE_HEIGHT;
+    
     // Set up the display
     zx_border(INK_BLACK);
     zx_cls(PAPER_BLACK | INK_WHITE);
@@ -109,51 +113,46 @@ int main(void) {
     // Main game loop
     while (1) {
        // Handle input (QAOP scrolls 1 pixel per frame)
-        int dx = 0;
-        int dy = 0;
-        unsigned char input_active = 0;
+        signed char dx = 0;
+        signed char dy = 0;
 
         // Kempston joystick (support eight-way scrolling)
         unsigned char joy = kempston_read();
         if (joy & KEMPSTON_LEFT) {
-            dx -= 1;
-            input_active = 1;
+            dx -= speed;
         }
         if (joy & KEMPSTON_RIGHT) {
-            dx += 1;
-            input_active = 1;
+            dx += speed;
         }
         if (joy & KEMPSTON_UP) {
-            dy -= 1;
-            input_active = 1;
+            dy -= speed;
         }
         if (joy & KEMPSTON_DOWN) {
-            dy += 1;
-            input_active = 1;
+            dy += speed;
         }
 
-        if (!input_active) {
+        if (!joy) {
             // QAOP keyboard
             unsigned char row_qwert = kbd_read_row(0xFEFE); // Q row
             unsigned char row_asdfg = kbd_read_row(0xFDFE); // A row
             unsigned char row_poiuy = kbd_read_row(0xF7FE); // O/P row
 
             if ((row_qwert & 0x01) == 0) { // Q
-                dy -= 1;
-                input_active = 1;
+                dy -= speed;
             }
             if ((row_asdfg & 0x01) == 0) { // A
-                dy += 1;
-                input_active = 1;
+                dy += speed;
             }
             if ((row_poiuy & 0x01) == 0) { // O
-                dx -= 1;
-                input_active = 1;
+                dx -= speed;
             }
             if ((row_poiuy & 0x02) == 0) { // P
-                dx += 1;
-                input_active = 1;
+                dx += speed;
             }
+        }
+
+        if (!dx && !dy) {
+            continue;
         }
 
         int prev_x = camera_x;
@@ -162,22 +161,24 @@ int main(void) {
         camera_x += dx;
         camera_y += dy;
 
-        // Cache visible tiles calculations (only when camera moves)
-        if (input_active) {
-            int visible_tiles_x = 16 + ((camera_x & 7) ? 1 : 0);
-            int visible_tiles_y = 16 + ((camera_y & 7) ? 1 : 0);
-            int max_x = (MAP_WIDTH - visible_tiles_x) * TILE_WIDTH;
-            int max_y = (MAP_HEIGHT - visible_tiles_y) * TILE_HEIGHT;
-
-            // Optimized boundary clamping
-            if (camera_x < 0) camera_x = 0;
-            else if (camera_x > max_x) camera_x = max_x;
-            
-            if (camera_y < 0) camera_y = 0;
-            else if (camera_y > max_y) camera_y = max_y;
+        // Optimized boundary clamping
+        if (camera_x < 0) {
+            camera_x = 0;
+        } else {
+            int in_tile_x = camera_x & 7;
+            int max_x = max_x_aligned - (in_tile_x ? (8 - in_tile_x) : 0);
+            if (camera_x > max_x) camera_x = max_x;
         }
-        
-        if (input_active) {
+
+        if (camera_y < 0) {
+            camera_y = 0;
+        } else {
+            int in_tile_y = camera_y & 7;
+            int max_y = max_y_aligned - (in_tile_y ? (8 - in_tile_y) : 0);
+            if (camera_y > max_y) camera_y = max_y;
+        }
+
+        if (camera_x != prev_x || camera_y != prev_y) {
             draw_map(map_data, tiles, offscreen_buffer, camera_x, camera_y, MAP_WIDTH);
             copy_viewport_to_screen();
         }
