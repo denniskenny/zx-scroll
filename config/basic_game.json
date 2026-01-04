@@ -1,0 +1,23 @@
+{
+    "name": "Basic Game",
+    "description": "A basic scrolling game configuration",
+    "levels": {
+        "level1": {
+            "name": "First Level",
+            "width": 32,
+            "height": 24,
+            "tileset": "default",
+            "path": "config/sample_map.csv"
+        }
+    },
+    "tilesets": {
+        "default": {
+            "name": "Default Tileset",
+            "path": "assets/basic_tiles16x16.zxp",
+            "tile_width": 8,
+            "tile_height": 8,
+            "columns": 16,
+            "rows": 16
+        }
+    }
+}

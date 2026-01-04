@@ -32,6 +32,8 @@ copy_loop:
     push de
     exx
     pop de
+
+    ld c, 16
     
     ldi
     ldi
@@ -60,6 +62,8 @@ copy_loop:
     exx
     pop de
     
+    ld c, 16
+
     ldi
     ldi
     ldi

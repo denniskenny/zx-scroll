@@ -19,3 +19,14 @@ A simple tilemap scroller for the ZX Spectrum, written in C using Z88DK.
 
 - Z88DK (tested with v2.2)
 - A ZX Spectrum emulator (e.g., Fuse, ZXSpin, or ZEsarUX)
+
+## How to use it
+
+Build default sample game:
+`make`
+
+Build using a different config:
+`make CONFIG=config/basic_game.json`
+
+Run in Fuse:
+`make run CONFIG=config/basic_config.json`

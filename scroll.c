@@ -4,6 +4,7 @@
 #include <string.h>
 #include "map_data.h"
 #include "draw_map.h"
+#include "tiles_data.h"
 
 #define KEMPSTON_PORT 0x1F
 #define KEMPSTON_RIGHT 0x01
@@ -40,23 +41,13 @@ static unsigned char kbd_read_row(unsigned int port) __naked {
 #define TILE_HEIGHT 8
 #define MAP_WIDTH 96
 #define MAP_HEIGHT 48
-#define TILE_COUNT 4
 
 void copy_viewport_to_screen(void);
 void load_map(void);
 void init_map(void);
+void load_scr_to_screen(const unsigned char *scr) __naked;
 
-// Simple 2-color tile graphics (8 bytes per tile)
-const unsigned char tiles[] = {
-    // Tile 0: Empty
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    // Tile 1: Solid block
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-    // Tile 2: Checkerboard
-    0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x55,
-    // Tile 3: Border
-    0xFF, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0xFF
-};
+extern const unsigned char hud_scr[];
 
 // Map data from external file (embedded)
 unsigned char map_data[MAP_WIDTH * MAP_HEIGHT];
@@ -97,6 +88,21 @@ void load_map(void) {
     memcpy(map_data, map_bin, MAP_WIDTH * MAP_HEIGHT);
 }
 
+void load_scr_to_screen(const unsigned char *scr) __naked {
+    scr;
+    __asm
+        di
+        pop de
+        pop hl
+        push de
+        ld de, #0x4000
+        ld bc, #6912
+        ldir
+        ei
+        ret
+    __endasm;
+}
+
 int main(void) {
     const signed char speed = 4;
     const int max_x_aligned = (MAP_WIDTH - 16) * TILE_WIDTH;
@@ -105,6 +111,10 @@ int main(void) {
     // Set up the display
     zx_border(INK_BLACK);
     zx_cls(PAPER_BLACK | INK_WHITE);
+
+    zx_border(INK_RED);
+    load_scr_to_screen(hud_scr);
+    zx_border(INK_GREEN);
 
     load_map();
     draw_map(map_data, tiles, offscreen_buffer, camera_x, camera_y, MAP_WIDTH);

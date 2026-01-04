@@ -279,10 +279,10 @@ no_carry:
     ret
 
 ; Aligned buffer for offscreen rendering
-; Placed at 0xC000 (uncontended RAM, 256-byte aligned for safe inc e)
+; Placed at 0xD000 (uncontended RAM, 256-byte aligned for safe inc e)
     SECTION data_user
     PUBLIC _offscreen_buffer
     
-    ORG 0xC000
+    ORG 0xD000
 _offscreen_buffer:
     DEFS 2048            ; 16 * 16 * 8 bytes
