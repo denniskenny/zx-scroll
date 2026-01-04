@@ -45,7 +45,7 @@ static unsigned char kbd_read_row(unsigned int port) __naked {
 void copy_viewport_to_screen(void);
 void load_map(void);
 void init_map(void);
-void load_scr_to_screen(const unsigned char *scr) __naked;
+void load_scr_to_screen(const unsigned char *scr);
 
 extern const unsigned char hud_scr[];
 
@@ -88,18 +88,15 @@ void load_map(void) {
     memcpy(map_data, map_bin, MAP_WIDTH * MAP_HEIGHT);
 }
 
-void load_scr_to_screen(const unsigned char *scr) __naked {
-    scr;
+void load_scr_to_screen(const unsigned char *scr) {
     __asm
         di
-        pop de
-        pop hl
-        push de
-        ld de, #0x4000
-        ld bc, #6912
-        ldir
+    __endasm;
+
+    memcpy((void *)0x4000, scr, 6912);
+
+    __asm
         ei
-        ret
     __endasm;
 }
 
@@ -112,9 +109,7 @@ int main(void) {
     zx_border(INK_BLACK);
     zx_cls(PAPER_BLACK | INK_WHITE);
 
-    zx_border(INK_RED);
     load_scr_to_screen(hud_scr);
-    zx_border(INK_GREEN);
 
     load_map();
     draw_map(map_data, tiles, offscreen_buffer, camera_x, camera_y, MAP_WIDTH);
