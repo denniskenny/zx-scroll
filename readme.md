@@ -149,16 +149,24 @@ The `draw_map.c` shifted path can be compiled in two modes using the
 
 #### Building with the flag
 
-```sh
-# Use specialized 7-entrypoint shifted drawing (default)
-make CONFIG_MK=config/basic_config.mk USER_CFLAGS="-DSHIFT_SPECIALISE=1"
+**Important:** When using `SHIFT_SPECIALISE=1`, you must also specify the offscreen
+buffer placement (`OFFSCREEN_BUFFER_ORG=0xF000`). The specialized shifted drawing
+adds more code, and without moving the buffer to the higher address, the CODE
+section will overlap the offscreen buffer.
 
-# Use original per-call shifted drawing
-make CONFIG_MK=config/basic_config.mk USER_CFLAGS="-DSHIFT_SPECIALISE=0"
+```sh
+# ✅ Correct: specialized shifted drawing with buffer moved to 0xF000
+make CONFIG_MK=config/basic_config.mk USER_CFLAGS="-DSHIFT_SPECIALISE=1 -Ca-DOFFSCREEN_BUFFER_ORG=0xF000"
+
+# ❌ Incorrect: causes CODE overlap error
+make CONFIG_MK=config/basic_config.mk USER_CFLAGS="-DSHIFT_SPECIALISE=1"
+# Error: Section CODE overlaps section bss_offscreen by 4704 bytes
 ```
 
-The flag is useful for benchmarking or when you want to compare the two
-implementations without changing the source code.
+**Why the error occurs:** The 7-entrypoint shifted implementation increases code size.
+The default offscreen buffer at 0xD000 no longer provides enough space, so the
+buffer must be moved to 0xF000. The config file already sets this, but when you
+override `USER_CFLAGS` from the command line, you must include both flags.
 
 ## Viewport copy (128-bit write optimization)
 
