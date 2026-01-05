@@ -11,7 +11,6 @@ _draw_aligned_asm:
     ld ix, 0
     add ix, sp
     
-    di                   ; Disable interrupts (no need to save alt regs)
     
     ; Load parameters into main registers
     ld e, (ix+4)         ; row low
@@ -273,16 +272,19 @@ no_carry:
     ld a, (hl)
     exx
     ld (de), a
-    
-    ei                   ; Re-enable interrupts
+
     pop ix
     ret
 
 ; Aligned buffer for offscreen rendering
 ; Placed at 0xD000 (uncontended RAM, 256-byte aligned for safe inc e)
-    SECTION data_user
+    SECTION bss_offscreen
     PUBLIC _offscreen_buffer
-    
-    ORG 0xD000
+
+    IFNDEF OFFSCREEN_BUFFER_ORG
+        DEFC OFFSCREEN_BUFFER_ORG = 0xD000
+    ENDIF
+
+    ORG OFFSCREEN_BUFFER_ORG
 _offscreen_buffer:
     DEFS 2048            ; 16 * 16 * 8 bytes

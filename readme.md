@@ -13,20 +13,143 @@ A simple tilemap scroller for the ZX Spectrum, written in C using Z88DK.
 
 1. Make sure you have Z88DK installed
 2. Run `make` to build the project
-3. Load the resulting .tap file in your ZX Spectrum emulator
+3. Load the resulting `.tap` file in your ZX Spectrum emulator
+
+### Make parameters
+
+- **CONFIG_MK**
+  Selects the build configuration `.mk` file.
+  Example:
+  `make CONFIG_MK=config/basic_config.mk`
+
+- **USER_CFLAGS**
+  Extra flags appended to the Z88DK `zcc` invocation.
+  Useful for passing assembler defines.
+  Examples:
+  `make USER_CFLAGS="-Ca-DOFFSCREEN_BUFFER_ORG=0xF000"`
+  `make USER_CFLAGS="-DSHIFT_SPECIALISE=1"`
+
+### Config file keys
+
+Build configs live under `config/*.mk` and can define:
+
+- `MAP_CSV`
+- `TILES_ZXP`
+- `MAP_WIDTH_TILES`, `MAP_HEIGHT_TILES`
+- `TILE_WIDTH_PX`, `TILE_HEIGHT_PX`
+- `USER_CFLAGS` (optional)
+
+### Offscreen buffer placement
+
+The offscreen buffer (`_offscreen_buffer`) is placed by the assembler using the
+`OFFSCREEN_BUFFER_ORG` define.
+
+- Default: `0xD000`
+- Aggressive (more space for CODE/data): `0xF000`
+
+Example:
+`make CONFIG_MK=config/basic_config.mk USER_CFLAGS="-Ca-DOFFSCREEN_BUFFER_ORG=0xF000"`
+
+## Memory map (48K Spectrum)
+
+```
+0xFFFF  +-------------------------------+
+        | Stack (grows downward)        |
+        |                               |
+0xF000  +-------------------------------+
+        | Offscreen buffer (2KB)        |  (OFFSCREEN_BUFFER_ORG=0xF000)
+        | _offscreen_buffer             |
+0xE800  +-------------------------------+
+        | Free RAM / heap / data        |
+        |                               |
+0x8000  +-------------------------------+
+        | Program CODE + data (z88dk)   |  (CFLAGS: -zorg=32768)
+        | scroll.tap / bench_scroll.tap |
+0x6000  +-------------------------------+
+        | System vars / contended area  |
+0x5B00  +-------------------------------+
+        | Attributes (768 bytes)        |
+0x5800  +-------------------------------+
+        | Screen pixels (6144 bytes)    |
+0x4000  +-------------------------------+
+        | ROM                           |
+0x0000  +-------------------------------+
+
+Notes:
+- If `OFFSCREEN_BUFFER_ORG` is set to `0xD000` (default), the offscreen buffer
+  lives in the 0xD000 region instead of 0xF000.
+- Embedded assets (e.g. `hud.scr`) are linked into the program image (they are
+  not fixed to a specific address).
+```
 
 ## Requirements
 
 - Z88DK (tested with v2.2)
 - A ZX Spectrum emulator (e.g., Fuse, ZXSpin, or ZEsarUX)
 
-## How to use it
+## How to use it
 
 Build default sample game:
 `make`
 
 Build using a different config:
-`make CONFIG=config/basic_game.json`
+`make CONFIG_MK=config/basic_game.mk`
 
 Run in Fuse:
-`make run CONFIG=config/basic_config.json`
+`make run CONFIG_MK=config/basic_config.mk`
+
+## Benchmarking (Fuse profiler)
+
+There is a standalone benchmark program (`bench_scroll.c`) which renders a fixed
+number of frames and exits. This is intended for reproducible Fuse profiling.
+
+- Build benchmark TAP:
+  `make CONFIG_MK=config/basic_config.mk bench_scroll`
+
+- Run benchmark in Fuse:
+  `make benchRun`
+
+- Save Fuse profile output to a file (for example):
+  `bench_baseline.profile`, `bench_specialised.profile`, `bench_block.profile`
+
+## Shifted drawing implementation
+
+### 7 fixed-shift entrypoints
+
+`draw_shifted.asm` implements the shifted tile renderer using lookup tables.
+
+- `_draw_shifted_asm(row, map_row, tiles_row, shift)`
+  Computes the left/right shift table pointers for `shift` (1..7), then jumps
+  into the shared core.
+
+- `_draw_shifted_asm_1` .. `_draw_shifted_asm_7`
+  Preload the shift table pointers for a fixed shift and jump into
+  `draw_shifted_common`. This avoids per-call shift-table setup when the shift
+  is constant.
+
+### Reduced call frequency (8 scanlines per call)
+
+`draw_shifted_block.asm` adds `_draw_shifted_block_asm(...)` which renders 8
+scanlines per call. `draw_map.c` uses this to reduce call overhead (fewer C/ASM
+transitions) while preserving the same pixel output.
+
+## Viewport copy (128-bit write optimization)
+
+The viewport blit routine (`copy_viewport.asm`, `_copy_viewport_to_screen`) copies
+the 128x128 pixel offscreen buffer to the Spectrum screen.
+
+Optimization details:
+
+- **16-byte bursts ("128-bit" writes)**
+  Each screen scanline in the viewport is 16 bytes wide. The routine copies each
+  scanline using 16x `LDI` (byte copy) rather than a single `LDIR`. This reduces
+  per-byte overhead (unrolled `LDI` is faster than `LDIR` on Z80).
+
+- **2-line loop unrolling**
+  The main loop processes two scanlines per iteration (64 iterations total) to
+  reduce loop overhead.
+
+- **Precomputed screen address table**
+  A lookup table (`scr_addr_table`) provides the destination screen address for
+  each scanline, avoiding expensive address arithmetic for the Spectrum's
+  non-linear bitmap layout.

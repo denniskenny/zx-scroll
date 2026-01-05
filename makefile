@@ -20,17 +20,29 @@ CONFIG_MK ?= config/basic_config.mk
 include $(CONFIG_MK)
 
 CFLAGS=+zx -vn -SO3 -zorg=32768 -startup=31 --opt-code-speed -compiler=sdcc -clib=sdcc_iy -mz80
+USER_CFLAGS ?=
 LDFLAGS=-lm -create-app
 
 all: scroll
 
 .PHONY: all run clean test testFuse
+.PHONY: bench benchRun
 
 run: scroll
 	$(FUSE_RUN)
 
-scroll: scroll.c draw_map.c tiles_data.c draw_aligned.asm draw_shifted.asm copy_viewport.asm hud_data.asm hud.scr
-	PATH=$(Z88DK)/bin:$$PATH Z88DK=$(Z88DK) ZCCCFG=$(ZCCCFG) $(ZCC) $(CFLAGS) -o scroll scroll.c draw_map.c tiles_data.c draw_aligned.asm draw_shifted.asm copy_viewport.asm hud_data.asm $(LDFLAGS)
+bench: bench_scroll
+
+benchRun: bench_scroll
+	$(FUSE) bench_scroll.tap
+
+scroll: scroll.c draw_map.c tiles_data.c draw_aligned.asm draw_shifted.asm draw_shifted_block.asm copy_viewport.asm hud_data.asm hud.scr
+	PATH=$(Z88DK)/bin:$$PATH Z88DK=$(Z88DK) ZCCCFG=$(ZCCCFG) $(ZCC) $(CFLAGS) $(USER_CFLAGS) -o scroll scroll.c draw_map.c tiles_data.c draw_aligned.asm draw_shifted.asm draw_shifted_block.asm copy_viewport.asm hud_data.asm $(LDFLAGS)
+
+bench_scroll: map_data.h tiles_data.h
+
+bench_scroll: bench_scroll.c draw_map.c tiles_data.c draw_aligned.asm draw_shifted.asm draw_shifted_block.asm copy_viewport.asm
+	PATH=$(Z88DK)/bin:$$PATH Z88DK=$(Z88DK) ZCCCFG=$(ZCCCFG) $(ZCC) $(CFLAGS) $(USER_CFLAGS) -o bench_scroll bench_scroll.c draw_map.c tiles_data.c draw_aligned.asm draw_shifted.asm draw_shifted_block.asm copy_viewport.asm $(LDFLAGS)
 
 scroll: map_data.h
 
@@ -52,7 +64,7 @@ map_data.h: map.bin
 	xxd -i map.bin > map_data.h
 
 test: test_draw_fast.c draw_aligned.asm draw_shifted.asm
-	PATH=$(Z88DK)/bin:$$PATH Z88DK=$(Z88DK) ZCCCFG=$(ZCCCFG) $(ZCC) +zx -vn -SO3 -startup=31 -clib=sdcc_iy -mz80 test_draw_fast.c draw_aligned.asm draw_shifted.asm -o test_draw -create-app
+	PATH=$(Z88DK)/bin:$$PATH Z88DK=$(Z88DK) ZCCCFG=$(ZCCCFG) $(ZCC) +zx -vn -SO3 -startup=31 -clib=sdcc_iy -mz80 $(USER_CFLAGS) test_draw_fast.c draw_aligned.asm draw_shifted.asm -o test_draw -create-app
 
 testFuse: test
 	$(FUSE_TEST)

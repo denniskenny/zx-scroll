@@ -4,6 +4,21 @@
 // External assembly functions for fast drawing
 extern void draw_aligned_asm(unsigned char *row, unsigned char *map_row, const unsigned char *tiles_base, unsigned char in_tile_y);
 extern void draw_shifted_asm(unsigned char *row, unsigned char *map_row, const unsigned char *tiles_row, unsigned char shift);
+extern void draw_shifted_block_asm(unsigned char *row, unsigned char *map_row, const unsigned char *tiles_base, unsigned char in_tile_y, unsigned char shift, unsigned char map_stride);
+
+#ifndef SHIFT_SPECIALISE
+#define SHIFT_SPECIALISE 1
+#endif
+
+#if SHIFT_SPECIALISE
+extern void draw_shifted_asm_1(unsigned char *row, unsigned char *map_row, const unsigned char *tiles_row);
+extern void draw_shifted_asm_2(unsigned char *row, unsigned char *map_row, const unsigned char *tiles_row);
+extern void draw_shifted_asm_3(unsigned char *row, unsigned char *map_row, const unsigned char *tiles_row);
+extern void draw_shifted_asm_4(unsigned char *row, unsigned char *map_row, const unsigned char *tiles_row);
+extern void draw_shifted_asm_5(unsigned char *row, unsigned char *map_row, const unsigned char *tiles_row);
+extern void draw_shifted_asm_6(unsigned char *row, unsigned char *map_row, const unsigned char *tiles_row);
+extern void draw_shifted_asm_7(unsigned char *row, unsigned char *map_row, const unsigned char *tiles_row);
+#endif
 
 // Draw map to offscreen buffer with pixel-level scrolling
 void draw_map(
@@ -52,31 +67,13 @@ next_row_aligned:
     } else {
         // Shifted path: blend two tiles using assembly
         register unsigned char shift = in_tile_x;
-        const unsigned char *tiles_row = tiles_base + in_tile_y;
 
-        unsigned char py = 128;
+        unsigned char blocks = 16;
         do {
-            if (!(map_ptr[0] | map_ptr[1] | map_ptr[2] | map_ptr[3] |
-                  map_ptr[4] | map_ptr[5] | map_ptr[6] | map_ptr[7] |
-                  map_ptr[8] | map_ptr[9] | map_ptr[10] | map_ptr[11] |
-                  map_ptr[12] | map_ptr[13] | map_ptr[14] | map_ptr[15] |
-                  map_ptr[16])) {
-                memset(row_ptr, 0, 16);
-                goto next_row_shifted;
-            }
-            
-            // Use assembly-optimized shifted drawing
-            draw_shifted_asm(row_ptr, map_ptr, tiles_row, shift);
+            draw_shifted_block_asm(row_ptr, map_ptr, tiles_base, in_tile_y, shift, (unsigned char)map_stride);
 
-next_row_shifted:
-            if (++in_tile_y == 8) {
-                in_tile_y = 0;
-                tiles_row = tiles_base;
-                map_ptr += map_stride;
-            } else {
-                tiles_row++;
-            }
-            row_ptr += 16;
-        } while (--py);
+            map_ptr += map_stride;
+            row_ptr += 16 * 8;
+        } while (--blocks);
     }
 }

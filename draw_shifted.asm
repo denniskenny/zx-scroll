@@ -3,6 +3,13 @@
     SECTION code_user
 
     PUBLIC _draw_shifted_asm
+    PUBLIC _draw_shifted_asm_1
+    PUBLIC _draw_shifted_asm_2
+    PUBLIC _draw_shifted_asm_3
+    PUBLIC _draw_shifted_asm_4
+    PUBLIC _draw_shifted_asm_5
+    PUBLIC _draw_shifted_asm_6
+    PUBLIC _draw_shifted_asm_7
 
 ; void draw_shifted_asm(unsigned char *row, unsigned char *map_row, 
 ;                       const unsigned char *tiles_row, unsigned char shift)
@@ -11,8 +18,6 @@ _draw_shifted_asm:
     push ix
     ld ix, 0
     add ix, sp
-    
-    di
 
     ; Compute lshift table address from shift value (1-7)
     ld a, (ix+10)        ; shift (1-7)
@@ -48,11 +53,87 @@ _draw_shifted_asm:
     ld h, (hl)
     ld l, a              ; HL = rshift table address
     ld (rshift_addr), hl
-    
+
+    jp draw_shifted_common
+
+; Fixed shift entrypoints (avoid per-scanline shift-table setup)
+; void draw_shifted_asm_N(unsigned char *row, unsigned char *map_row, const unsigned char *tiles_row)
+_draw_shifted_asm_1:
+     push ix
+     ld ix, 0
+     add ix, sp
+     ld hl, _lshift_1
+     ld (lshift_addr), hl
+     ld hl, _rshift_7
+     ld (rshift_addr), hl
+     jp draw_shifted_common
+
+_draw_shifted_asm_2:
+     push ix
+     ld ix, 0
+     add ix, sp
+     ld hl, _lshift_2
+     ld (lshift_addr), hl
+     ld hl, _rshift_6
+     ld (rshift_addr), hl
+     jp draw_shifted_common
+
+_draw_shifted_asm_3:
+     push ix
+     ld ix, 0
+     add ix, sp
+     ld hl, _lshift_3
+     ld (lshift_addr), hl
+     ld hl, _rshift_5
+     ld (rshift_addr), hl
+     jp draw_shifted_common
+
+_draw_shifted_asm_4:
+     push ix
+     ld ix, 0
+     add ix, sp
+     ld hl, _lshift_4
+     ld (lshift_addr), hl
+     ld hl, _rshift_4
+     ld (rshift_addr), hl
+     jp draw_shifted_common
+
+_draw_shifted_asm_5:
+     push ix
+     ld ix, 0
+     add ix, sp
+     ld hl, _lshift_5
+     ld (lshift_addr), hl
+     ld hl, _rshift_3
+     ld (rshift_addr), hl
+     jp draw_shifted_common
+
+_draw_shifted_asm_6:
+     push ix
+     ld ix, 0
+     add ix, sp
+     ld hl, _lshift_6
+     ld (lshift_addr), hl
+     ld hl, _rshift_2
+     ld (rshift_addr), hl
+     jp draw_shifted_common
+
+_draw_shifted_asm_7:
+     push ix
+     ld ix, 0
+     add ix, sp
+     ld hl, _lshift_7
+     ld (lshift_addr), hl
+     ld hl, _rshift_1
+     ld (rshift_addr), hl
+     jp draw_shifted_common
+
+draw_shifted_common:
+
     ; Get parameters
-    ld e, (ix+4)
-    ld d, (ix+5)         ; DE = output row
-    ld l, (ix+6)
+     ld e, (ix+4)
+     ld d, (ix+5)         ; DE = output row
+     ld l, (ix+6)
     ld h, (ix+7)         ; HL = map_row
 
     ; Cache tiles_row pointer bytes (avoid repeated IX-indexed loads in loop)
@@ -216,7 +297,6 @@ _draw_shifted_asm:
     dec b
     jp nz, tile_loop
 
-    ei
     pop ix
     ret
 
@@ -234,6 +314,7 @@ _draw_shifted_asm:
 ; Lookup table addresses
     SECTION rodata_user
 
+    PUBLIC lshift_table_addrs
 lshift_table_addrs:
     DEFW _lshift_1
     DEFW _lshift_2
@@ -243,6 +324,7 @@ lshift_table_addrs:
     DEFW _lshift_6
     DEFW _lshift_7
 
+    PUBLIC rshift_table_addrs
 rshift_table_addrs:
     DEFW _rshift_1
     DEFW _rshift_2
