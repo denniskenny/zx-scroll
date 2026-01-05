@@ -133,6 +133,33 @@ number of frames and exits. This is intended for reproducible Fuse profiling.
 scanlines per call. `draw_map.c` uses this to reduce call overhead (fewer C/ASM
 transitions) while preserving the same pixel output.
 
+### Selecting shifted implementation with `-DSHIFT_SPECIALISE`
+
+The `draw_map.c` shifted path can be compiled in two modes using the
+`SHIFT_SPECIALISE` preprocessor flag:
+
+- **`SHIFT_SPECIALISE=0`** (or undefined)
+  Uses the original `_draw_shifted_asm(row, map_row, tiles_row, shift)` entrypoint.
+  The shift value is passed as a parameter and computed per call.
+
+- **`SHIFT_SPECIALISE=1`** (default)
+  Uses the 7 fixed-shift entrypoints `_draw_shifted_asm_1.._7`. The C code
+  selects the appropriate entrypoint once per frame with a `switch(shift)` and
+  calls it directly, avoiding per-call shift-table setup.
+
+#### Building with the flag
+
+```sh
+# Use specialized 7-entrypoint shifted drawing (default)
+make CONFIG_MK=config/basic_config.mk USER_CFLAGS="-DSHIFT_SPECIALISE=1"
+
+# Use original per-call shifted drawing
+make CONFIG_MK=config/basic_config.mk USER_CFLAGS="-DSHIFT_SPECIALISE=0"
+```
+
+The flag is useful for benchmarking or when you want to compare the two
+implementations without changing the source code.
+
 ## Viewport copy (128-bit write optimization)
 
 The viewport blit routine (`copy_viewport.asm`, `_copy_viewport_to_screen`) copies
