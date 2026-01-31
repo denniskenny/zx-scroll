@@ -9,4 +9,5 @@ MAP_HEIGHT_TILES := 48
 TILE_WIDTH_PX := 8
 TILE_HEIGHT_PX := 8
 
-USER_CFLAGS += -Ca-DOFFSCREEN_BUFFER_ORG=0xF000
+# Note: Original 128x128 buffer stays at 0xD000 (default)
+# The 32x16 dirty-edge buffer is at 0xF000

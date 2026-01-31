@@ -276,8 +276,10 @@ no_carry:
     pop ix
     ret
 
-; Aligned buffer for offscreen rendering
+; Aligned buffer for offscreen rendering (16x16 viewport, 128x128 pixels)
+; Only included if INCLUDE_OFFSCREEN_BUFFER is defined
 ; Placed at 0xD000 (uncontended RAM, 256-byte aligned for safe inc e)
+    IFDEF INCLUDE_OFFSCREEN_BUFFER
     SECTION bss_offscreen
     PUBLIC _offscreen_buffer
 
@@ -288,3 +290,4 @@ no_carry:
     ORG OFFSCREEN_BUFFER_ORG
 _offscreen_buffer:
     DEFS 2048            ; 16 * 16 * 8 bytes
+    ENDIF

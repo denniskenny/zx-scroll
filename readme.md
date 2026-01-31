@@ -168,6 +168,92 @@ The default offscreen buffer at 0xD000 no longer provides enough space, so the
 buffer must be moved to 0xF000. The config file already sets this, but when you
 override `USER_CFLAGS` from the command line, you must include both flags.
 
+## Dirty-Edge Scrolling System
+
+The dirty-edge scrolling system (`draw_dirty_edge.c`, `draw_dirty_edge.asm`) provides
+smooth pixel-by-pixel scrolling with minimal redraw overhead.
+
+### Overview
+
+Instead of redrawing the entire viewport each frame, dirty-edge scrolling:
+1. **Shifts** existing pixel data by 1 pixel in the scroll direction
+2. **Draws only the new edge** (1 pixel column or 1 scanline) exposed by the scroll
+
+This dramatically reduces the amount of tile rendering needed per frame.
+
+### Viewport
+
+- **Size:** 32x12 characters (256x96 pixels)
+- **Position:** Centered on screen (starting at Y=48)
+- **Buffer:** 3072 bytes in `bss_user` section
+
+### API
+
+```c
+// Scroll by stride pixels in direction, draw new edges
+unsigned char dirty_edge_scroll(
+    unsigned char direction,      // SCROLL_X_PLUS, SCROLL_X_MINUS, etc.
+    const unsigned char *map_data,
+    const unsigned char *tiles,
+    unsigned char *buffer,
+    int *camera_x,
+    int *camera_y,
+    int map_width,
+    int map_height,
+    unsigned char stride          // Pixels to scroll (1-255)
+);
+
+// Blit buffer to screen
+void copy_viewport_32x16_to_screen(unsigned char *buffer);
+```
+
+### Direction Flags
+
+```c
+#define SCROLL_X_PLUS   0x01  // Right
+#define SCROLL_X_MINUS  0x02  // Left
+#define SCROLL_Y_PLUS   0x04  // Down
+#define SCROLL_Y_MINUS  0x08  // Up
+```
+
+Diagonal scrolling is supported by combining flags (e.g., `SCROLL_X_PLUS | SCROLL_Y_PLUS`).
+
+### Assembly Optimizations
+
+#### 1-Pixel Shift Routines (Fully Unrolled)
+- **`shift_buffer_left_1px`** - 32x `RL (HL)` unrolled per row, EXX for row counter
+- **`shift_buffer_right_1px`** - 32x `RR (HL)` unrolled per row, EXX for row counter
+- **`shift_buffer_up_1row`** - Fast `LDIR` block copy (3040 bytes)
+- **`shift_buffer_down_1row`** - Fast `LDDR` block copy (3040 bytes)
+
+#### 8-Pixel Shift Routines (Byte-Aligned, No Bit Shifts)
+- **`shift_buffer_left_8px`** - `LDIR` 31 bytes/row, ~8x faster than 8 single shifts
+- **`shift_buffer_right_8px`** - `LDDR` 31 bytes/row
+- **`shift_buffer_up_8rows`** - Single `LDIR` of 2816 bytes
+- **`shift_buffer_down_8rows`** - Single `LDDR` of 2816 bytes
+
+#### Viewport Blit
+- 32x unrolled `LDI` per scanline
+- Precomputed screen address table for Spectrum's non-linear layout
+- EXX for table pointer management
+
+### Performance Comparison
+
+| Operation | Cycles (approx) | Notes |
+|-----------|-----------------|-------|
+| Vertical 1-row shift | ~61,000 | LDIR 3040 bytes |
+| Horizontal 1-pixel shift | ~75,000 | 96 rows × 32 unrolled rotates |
+| Horizontal 8-pixel shift | ~62,000 | LDIR 31 bytes × 96 rows |
+| Vertical 8-row shift | ~57,000 | LDIR 2816 bytes |
+
+### Files
+
+- `draw_dirty_edge.h` - API declarations and constants
+- `draw_dirty_edge.c` - Scroll handlers, edge drawing functions
+- `draw_dirty_edge.asm` - Assembly shift routines (1px and 8px)
+- `copy_viewport_32x16.asm` - Viewport blit and buffer allocation
+- `test_scroll.c` - Performance test framework
+
 ## Viewport copy (128-bit write optimization)
 
 The viewport blit routine (`copy_viewport.asm`, `_copy_viewport_to_screen`) copies
