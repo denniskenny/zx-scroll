@@ -7,8 +7,8 @@
     PUBLIC _shift_buffer_right_1px
     PUBLIC _shift_buffer_up_1row
     PUBLIC _shift_buffer_down_1row
-    PUBLIC _draw_aligned_32col_asm
-    PUBLIC _draw_shifted_32col_asm
+    PUBLIC _shift_buffer_left_1px_rows
+    PUBLIC _shift_buffer_right_1px_rows
 
 ; Constants
 VIEWPORT_WIDTH_BYTES    EQU 32      ; 256 pixels / 8 = 32 bytes per scanline
@@ -83,6 +83,47 @@ shift_left_row_loop:
     exx
     jp nz, shift_left_row_loop
     
+    ret
+
+;------------------------------------------------------------------------------
+; shift_buffer_left_1px_rows - Shift N rows left by 1 pixel (ring-buffer segment)
+; void shift_buffer_left_1px_rows(unsigned char *buffer, unsigned char rows)
+;------------------------------------------------------------------------------
+_shift_buffer_left_1px_rows:
+    push ix
+    ld ix, 0
+    add ix, sp
+
+    ld l, (ix+4)
+    ld h, (ix+5)         ; HL = buffer
+    ld b, (ix+6)         ; B = rows
+
+    ld a, b
+    or a
+    jr z, _sbl_done
+
+    ld de, 31
+
+_sbl_row_loop:
+    ; HL points at row start
+    push hl
+    add hl, de            ; HL = row start + 31
+    or a                  ; clear carry
+    REPT 31
+    rl (hl) \ dec hl
+    ENDR
+    rl (hl)
+    pop hl
+    ld a, l
+    add a, 32
+    ld l, a
+    jr nc, _sbl_no_carry
+    inc h
+_sbl_no_carry:
+    djnz _sbl_row_loop
+
+_sbl_done:
+    pop ix
     ret
 
 ;------------------------------------------------------------------------------
@@ -207,6 +248,37 @@ shift_right_row_loop:
     exx
     jp nz, shift_right_row_loop
     
+    ret
+
+;------------------------------------------------------------------------------
+; shift_buffer_right_1px_rows - Shift N rows right by 1 pixel (ring-buffer segment)
+; void shift_buffer_right_1px_rows(unsigned char *buffer, unsigned char rows)
+;------------------------------------------------------------------------------
+_shift_buffer_right_1px_rows:
+    push ix
+    ld ix, 0
+    add ix, sp
+
+    ld l, (ix+4)
+    ld h, (ix+5)         ; HL = buffer
+    ld b, (ix+6)         ; B = rows
+
+    ld a, b
+    or a
+    jr z, _sbr_done
+
+_sbr_row_loop:
+    ; HL points at row start
+    or a                  ; clear carry
+    REPT 31
+    rr (hl) \ inc hl
+    ENDR
+    rr (hl)
+    inc hl                ; move to next row start
+    djnz _sbr_row_loop
+
+_sbr_done:
+    pop ix
     ret
 
 ;------------------------------------------------------------------------------
@@ -560,71 +632,6 @@ clear_top_8:
     pop ix
     ret
 
-;------------------------------------------------------------------------------
-; draw_aligned_32col_asm - Draw 32 aligned tiles for one scanline
-; void draw_aligned_32col_asm(row, map_row, tiles, in_tile_y)
-;------------------------------------------------------------------------------
-_draw_aligned_32col_asm:
-    push ix
-    ld ix, 0
-    add ix, sp
-    
-    ld e, (ix+4)
-    ld d, (ix+5)         ; DE = row pointer
-    ld l, (ix+6)
-    ld h, (ix+7)         ; HL = map_row
-    
-    ; Precompute tiles_base + in_tile_y
-    ld c, (ix+8)
-    ld b, (ix+9)         ; BC = tiles
-    ld a, (ix+10)        ; A = in_tile_y
-    add a, c
-    ld c, a
-    jr nc, aligned32_no_carry
-    inc b
-aligned32_no_carry:
-    ; BC = tiles + in_tile_y
-    push bc
-    exx
-    pop de               ; DE' = tiles + in_tile_y
-    ld b, 0              ; B' = 0 for H' reset
-    exx
-    
-    ; Draw 32 tiles
-    REPT 32
-    ld a, (hl)
-    exx
-    ld l, a
-    ld h, b              ; H' = 0
-    add hl, hl
-    add hl, hl
-    add hl, hl           ; HL' = tile * 8
-    add hl, de           ; + tiles + in_tile_y
-    ld a, (hl)
-    exx
-    ld (de), a
-    inc hl
-    inc de
-    ENDR
-    
-    pop ix
-    ret
-
-;------------------------------------------------------------------------------
-; draw_shifted_32col_asm - Draw 32 shifted tiles for one scanline
-; void draw_shifted_32col_asm(row, map_row, tiles, in_tile_y, shift)
-;------------------------------------------------------------------------------
-_draw_shifted_32col_asm:
-    push ix
-    ld ix, 0
-    add ix, sp
-    
-    ; This is complex - needs left/right shift blending
-    ; Placeholder: just call aligned for now
-    call _draw_aligned_32col_asm
-    
-    pop ix
-    ret
 
 ;------------------------------------------------------------------------------
 ; multiply_de_hl - Multiply DE by HL, result in HL (16-bit)

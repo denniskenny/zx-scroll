@@ -39,33 +39,31 @@ void dirty_edge_full_redraw(
 
 // Scroll by stride pixels in direction and draw only the new edges
 // Returns 1 if scroll was applied, 0 if blocked (e.g., at map edge)
+// stride_x: horizontal scroll speed (pixels per frame)
+// stride_y: vertical scroll speed (pixels per frame)
 unsigned char dirty_edge_scroll(
     unsigned char direction,
     const unsigned char *map_data,
     const unsigned char *tiles,
     unsigned char *buffer,
+    unsigned char *head,
     int *camera_x,
     int *camera_y,
     int map_width,
     int map_height,
-    unsigned char stride
+    unsigned char stride_x,
+    unsigned char stride_y
 );
-
-// Individual scroll routines (called by dirty_edge_scroll)
-void scroll_x_plus(unsigned char *buffer, const unsigned char *map_data, 
-                   const unsigned char *tiles, int camera_x, int camera_y, int map_width);
-void scroll_x_minus(unsigned char *buffer, const unsigned char *map_data,
-                    const unsigned char *tiles, int camera_x, int camera_y, int map_width);
-void scroll_y_plus(unsigned char *buffer, const unsigned char *map_data,
-                   const unsigned char *tiles, int camera_x, int camera_y, int map_width);
-void scroll_y_minus(unsigned char *buffer, const unsigned char *map_data,
-                    const unsigned char *tiles, int camera_x, int camera_y, int map_width);
 
 // Assembly routines for fast buffer manipulation (1-pixel shifts)
 extern void shift_buffer_left_1px(unsigned char *buffer);   // For x+1 scroll
 extern void shift_buffer_right_1px(unsigned char *buffer);  // For x-1 scroll
 extern void shift_buffer_up_1row(unsigned char *buffer);    // For y+1 scroll
 extern void shift_buffer_down_1row(unsigned char *buffer);  // For y-1 scroll
+
+// Parameterized row-count variants (used for ring-buffer segments)
+extern void shift_buffer_left_1px_rows(unsigned char *buffer, unsigned char rows);
+extern void shift_buffer_right_1px_rows(unsigned char *buffer, unsigned char rows);
 
 // Dedicated 2px and 4px shift routines (faster than calling 1px multiple times)
 extern void shift_buffer_left_2px(unsigned char *buffer);
@@ -78,16 +76,6 @@ extern void shift_buffer_left_8px(unsigned char *buffer);   // For x+8 scroll
 extern void shift_buffer_right_8px(unsigned char *buffer);  // For x-8 scroll
 extern void shift_buffer_up_8rows(unsigned char *buffer);   // For y+8 scroll
 extern void shift_buffer_down_8rows(unsigned char *buffer); // For y-8 scroll
-
-// Draw single edge (column or row) into buffer
-extern void draw_edge_right(unsigned char *buffer, const unsigned char *map_data,
-                            const unsigned char *tiles, int camera_x, int camera_y, int map_width);
-extern void draw_edge_left(unsigned char *buffer, const unsigned char *map_data,
-                           const unsigned char *tiles, int camera_x, int camera_y, int map_width);
-extern void draw_edge_bottom(unsigned char *buffer, const unsigned char *map_data,
-                             const unsigned char *tiles, int camera_x, int camera_y, int map_width);
-extern void draw_edge_top(unsigned char *buffer, const unsigned char *map_data,
-                          const unsigned char *tiles, int camera_x, int camera_y, int map_width);
 
 // Copy the 32x16 viewport buffer to screen (centered)
 extern void copy_viewport_32x16_to_screen(unsigned char *buffer);

@@ -2,39 +2,35 @@
 #include <arch/spectrum.h>
 #include <intrinsic.h>
 #include <string.h>
-#include "map_data.h"
-#include "draw_map.h"
 #include "draw_dirty_edge.h"
-#include "tiles_data.h"
 
-#define KEMPSTON_PORT 0x1F
-#define KEMPSTON_RIGHT 0x01
-#define KEMPSTON_LEFT 0x02
-#define KEMPSTON_DOWN 0x04
-#define KEMPSTON_UP 0x08
+extern const unsigned char tiles[];
+extern unsigned char map_data[];
 
-static unsigned char kempston_read(void) __naked {
-    __asm
-        push bc
-        ld bc, #KEMPSTON_PORT
-        in a, (c)
-        pop bc
-        ld l, a
-        ret
-    __endasm;
-}
-
-static unsigned char kbd_read_row(unsigned int port) __naked {
-    port;
-    __asm
-        push bc
-        ld b, h
-        ld c, l
-        in a, (c)
-        pop bc
-        ld l, a
-        ret
-    __endasm;
+// Input reader using z88dk's input library (keyboard + Kempston joystick)
+static unsigned char read_keys(void) {
+    unsigned char key_dir = SCROLL_NONE;
+    unsigned char joy_dir = SCROLL_NONE;
+    
+    // Read keyboard
+    if (in_key_pressed(IN_KEY_SCANCODE_q)) key_dir |= SCROLL_Y_MINUS;  // Q = up
+    if (in_key_pressed(IN_KEY_SCANCODE_a)) key_dir |= SCROLL_Y_PLUS;   // A = down
+    if (in_key_pressed(IN_KEY_SCANCODE_o)) key_dir |= SCROLL_X_MINUS;  // O = left
+    if (in_key_pressed(IN_KEY_SCANCODE_p)) key_dir |= SCROLL_X_PLUS;   // P = right
+    
+    // Read Kempston joystick (returns bit flags: UP=0x01, DOWN=0x02, LEFT=0x04, RIGHT=0x08)
+    uint16_t joy = in_stick_kempston();
+    if (joy & IN_STICK_UP)    joy_dir |= SCROLL_Y_MINUS;
+    if (joy & IN_STICK_DOWN)  joy_dir |= SCROLL_Y_PLUS;
+    if (joy & IN_STICK_LEFT)  joy_dir |= SCROLL_X_MINUS;
+    if (joy & IN_STICK_RIGHT) joy_dir |= SCROLL_X_PLUS;
+    
+    // Prefer keyboard if any key is pressed, otherwise use joystick
+    if (key_dir != SCROLL_NONE) {
+        return key_dir;
+    }
+    
+    return joy_dir;
 }
 
 // Tile definitions (4x4 tiles, 8x8 pixels each)
@@ -43,54 +39,36 @@ static unsigned char kbd_read_row(unsigned int port) __naked {
 #define MAP_WIDTH 96
 #define MAP_HEIGHT 48
 
-void copy_viewport_to_screen(void);
 void copy_viewport_32x16_to_screen(unsigned char *buffer);
-void load_map(void);
-void init_map(void);
+void copy_viewport_32x16_to_screen_ring(unsigned char *buffer, unsigned char head_row);
 void load_scr_to_screen(const unsigned char *scr);
 
 extern const unsigned char hud_scr[];
-
-// Map data from external file (embedded)
-unsigned char map_data[MAP_WIDTH * MAP_HEIGHT];
-
-// Off-screen buffer for double buffering (16x16 tiles = 128x128 pixels)
-// Defined in draw_fast.asm with 256-byte alignment for safe inc e
-extern unsigned char offscreen_buffer[16 * 16 * 8];
 
 // 32x16 viewport buffer for dirty-edge scrolling (256x128 pixels)
 extern unsigned char offscreen_buffer_32x16[];
 
 int camera_x = 0;
 int camera_y = 0;
+unsigned char head_row = 0;
 
-void init_map(void) {
-    for (int y = 0; y < MAP_HEIGHT; y++) {
-        for (int x = 0; x < MAP_WIDTH; x++) {
-            unsigned char t = 0;
-
-            if (x == 0 || y == 0 || x == (MAP_WIDTH - 1) || y == (MAP_HEIGHT - 1)) {
-                t = 3;
-            } else if (((x >> 2) + (y >> 2)) & 1) {
-                t = 2;
-            } else if ((x & 7) == 0 || (y & 7) == 0) {
-                t = 1;
-            } else {
-                t = 0;
-            }
-
-            map_data[y * MAP_WIDTH + x] = t;
-        }
-    }
-}
-
-// Assembly-optimized screen copy (in copy_viewport.asm)
-extern void copy_viewport_to_screen(void);
-
-
-// Load map data from embedded array
-void load_map(void) {
-    memcpy(map_data, map_bin, MAP_WIDTH * MAP_HEIGHT);
+static unsigned char floating_bus_wait(void) __naked {
+    __asm
+        ld b, #0x09
+        ld c, #0x80
+    _fb_wt:
+        in a, (#0xFF)
+        cp b
+        jr z, _fb_ok
+        dec c
+        jr nz, _fb_wt
+        ld l, #0x00
+        jr _fb_dn
+    _fb_ok:
+        ld l, #0x01
+    _fb_dn:
+        ret
+    __endasm;
 }
 
 void load_scr_to_screen(const unsigned char *scr) {
@@ -143,36 +121,52 @@ int main(void) {
     zx_border(INK_BLACK);
     
     load_scr_to_screen(hud_scr);
-    load_map();
     clear_viewport_attrs();
     draw_initial_tilemap();
     
+    // Floating bus: set unique attribute at row 23 for sync detection
+    *((unsigned char *)0x5AE0) = 0x09;
+    
+    // Beam-chasing main loop:
+    // 1. Wait for beam past viewport (floating bus sync)
+    // 2. Blit to screen (beam in bottom border/HUD - safe zone)
+    // 3. Read input (free time while beam in border)
+    // 4. Scroll + edge draw (free time while beam in top border/HUD)
+    // 5. Loop (no HALT needed if floating bus syncs; HALT as fallback)
+    
+    // First frame always needs blit
+    unsigned char need_blit = 1;
+    
     while (1) {
         unsigned char direction = SCROLL_NONE;
+        unsigned char fb_ok = 0;
+        
+        // Step 3: Read input (beam in bottom border - free time)
+        direction = read_keys();
 
-        unsigned char joy = kempston_read();
-        if (joy & KEMPSTON_LEFT)  direction |= SCROLL_X_MINUS;
-        if (joy & KEMPSTON_RIGHT) direction |= SCROLL_X_PLUS;
-        if (joy & KEMPSTON_UP)    direction |= SCROLL_Y_MINUS;
-        if (joy & KEMPSTON_DOWN)  direction |= SCROLL_Y_PLUS;
-
-        if (!joy) {
-            unsigned char row_qwert = kbd_read_row(0xFEFE);
-            unsigned char row_asdfg = kbd_read_row(0xFDFE);
-            unsigned char row_poiuy = kbd_read_row(0xF7FE);
-
-            if ((row_qwert & 0x01) == 0) direction |= SCROLL_Y_MINUS;
-            if ((row_asdfg & 0x01) == 0) direction |= SCROLL_Y_PLUS;
-            if ((row_poiuy & 0x01) == 0) direction |= SCROLL_X_MINUS;
-            if ((row_poiuy & 0x02) == 0) direction |= SCROLL_X_PLUS;
+        // Idle fast-path: if nothing changed and no input, sleep (lowest CPU)
+        if (!need_blit && direction == SCROLL_NONE) {
+            intrinsic_halt();
+            continue;
         }
 
+        // Step 4: Scroll + edge draw (beam in border/top HUD - free time)
         if (direction != SCROLL_NONE) {
-            dirty_edge_scroll(direction, map_data, tiles, offscreen_buffer_32x16,
-                             &camera_x, &camera_y, MAP_WIDTH, MAP_HEIGHT, 1);
+            dirty_edge_scroll(direction, map_data, tiles, offscreen_buffer_32x16, &head_row,
+                             &camera_x, &camera_y, MAP_WIDTH, MAP_HEIGHT, 4, 2);  // stride_x=4, stride_y=2
+            need_blit = 1;
         }
 
-        copy_viewport_32x16_to_screen(offscreen_buffer_32x16);
-        intrinsic_halt();
+        // Step 1+2: Sync immediately before blit to minimize tearing
+        if (need_blit) {
+            fb_ok = floating_bus_wait();
+            copy_viewport_32x16_to_screen_ring(offscreen_buffer_32x16, head_row);
+            need_blit = 0;
+        }
+        
+        // HALT as frame sync fallback
+        if (!fb_ok) {
+            intrinsic_halt();
+        }
     }
 }

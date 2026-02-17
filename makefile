@@ -23,44 +23,40 @@ CFLAGS=+zx -vn -SO3 -zorg=32768 -startup=31 --opt-code-speed -compiler=sdcc -cli
 USER_CFLAGS ?=
 LDFLAGS=-lm -create-app
 
-all: scroll
+all: scroll.tap
 
-.PHONY: all run clean test testFuse
-.PHONY: bench benchRun
-.PHONY: scroll_dirty dirtyRun
+.PHONY: all run clean
 
-run: scroll
+run: scroll.tap
 	$(FUSE_RUN)
 
-bench: bench_scroll
+# Assemble tile data standalone
+tiles_data.bin: tiles_data.asm
+	$(Z88DK)/bin/z88dk-z80asm -b tiles_data.asm
 
-benchRun: bench_scroll
-	$(FUSE) bench_scroll.tap
+# Contended data block: tiles (2048 bytes) + map (4608 bytes) loaded at 0x6000
+contended_data.bin: tiles_data.bin map.bin
+	cat tiles_data.bin map.bin > contended_data.bin
 
-scroll: scroll.c draw_map.c draw_dirty_edge.c tiles_data.c draw_aligned.asm draw_shifted.asm draw_shifted_block.asm draw_dirty_edge.asm copy_viewport_32x16.asm hud_data.asm hud.scr
-	PATH=$(Z88DK)/bin:$$PATH Z88DK=$(Z88DK) ZCCCFG=$(ZCCCFG) $(ZCC) $(CFLAGS) $(USER_CFLAGS) -o scroll scroll.c draw_map.c draw_dirty_edge.c tiles_data.c draw_aligned.asm draw_shifted.asm draw_shifted_block.asm draw_dirty_edge.asm copy_viewport_32x16.asm hud_data.asm $(LDFLAGS)
+# Build main program (tiles_extern.asm provides _tiles=$6000, _map_data=$6800)
+scroll_CODE.bin: scroll.c draw_dirty_edge.c draw_dirty_edge.asm copy_viewport_32x16.asm tiles_extern.asm hud_data.asm hud.scr
+	PATH=$(Z88DK)/bin:$$PATH Z88DK=$(Z88DK) ZCCCFG=$(ZCCCFG) $(ZCC) $(CFLAGS) $(USER_CFLAGS) -o scroll scroll.c draw_dirty_edge.c draw_dirty_edge.asm copy_viewport_32x16.asm tiles_extern.asm hud_data.asm -lm
 
-bench_scroll: map_data.h tiles_data.h
+# Build tap: BASIC loader + contended data at 0x6000 + main code at 0x8000
+scroll.tap: scroll_CODE.bin contended_data.bin
+	$(Z88DK)/bin/z88dk-appmake +zx -b contended_data.bin -o contended_data.tap --noloader --org 24576 --blockname data
+	$(Z88DK)/bin/z88dk-appmake +zx -b scroll_CODE.bin -o scroll_code.tap --noloader --org 32768 --blockname scroll
+	python3 make_loader_tap.py
+	cat loader.tap contended_data.tap scroll_code.tap > scroll.tap
 
-bench_scroll: bench_scroll.c draw_map.c tiles_data.c draw_aligned.asm draw_shifted.asm draw_shifted_block.asm copy_viewport.asm
-	PATH=$(Z88DK)/bin:$$PATH Z88DK=$(Z88DK) ZCCCFG=$(ZCCCFG) $(ZCC) $(CFLAGS) $(USER_CFLAGS) -Ca-DINCLUDE_OFFSCREEN_BUFFER -o bench_scroll bench_scroll.c draw_map.c tiles_data.c draw_aligned.asm draw_shifted.asm draw_shifted_block.asm copy_viewport.asm $(LDFLAGS)
-
-# Dirty-edge scrolling system (32x16 viewport, 8-direction scroll)
-scroll_dirty: map_data.h tiles_data.h
-
-scroll_dirty: scroll_dirty.c draw_dirty_edge.c tiles_data.c draw_dirty_edge.asm copy_viewport_32x16.asm hud_data.asm
-	PATH=$(Z88DK)/bin:$$PATH Z88DK=$(Z88DK) ZCCCFG=$(ZCCCFG) $(ZCC) $(CFLAGS) $(USER_CFLAGS) -o scroll_dirty scroll_dirty.c draw_dirty_edge.c tiles_data.c draw_dirty_edge.asm copy_viewport_32x16.asm hud_data.asm $(LDFLAGS)
-
-dirtyRun: scroll_dirty
-	$(FUSE) scroll_dirty.tap
-
-scroll: map_data.h
-
-scroll: tiles_data.h
 
 generate_tiles: generate_tiles.c
 	$(HOSTCC) -O2 -o $@ $<
 
+tiles_data.asm: $(CONFIG_MK) $(TILES_ZXP) generate_tiles
+	./generate_tiles $(TILES_ZXP) tiles_data.asm $(TILE_WIDTH_PX) $(TILE_HEIGHT_PX)
+
+# Also generate C header (for reference/tools only)
 tiles_data.h: $(CONFIG_MK) $(TILES_ZXP) generate_tiles
 	./generate_tiles $(TILES_ZXP) tiles_data.h $(TILE_WIDTH_PX) $(TILE_HEIGHT_PX)
 
@@ -73,11 +69,5 @@ map.bin: $(CONFIG_MK) $(MAP_CSV) generate_map
 map_data.h: map.bin
 	xxd -i map.bin > map_data.h
 
-test: test_draw_fast.c draw_aligned.asm draw_shifted.asm
-	PATH=$(Z88DK)/bin:$$PATH Z88DK=$(Z88DK) ZCCCFG=$(ZCCCFG) $(ZCC) +zx -vn -SO3 -startup=31 -clib=sdcc_iy -mz80 $(USER_CFLAGS) test_draw_fast.c draw_aligned.asm draw_shifted.asm -o test_draw -create-app
-
-testFuse: test
-	$(FUSE_TEST)
-
 clean:
-	rm -f scroll scroll.tap scroll_CODE.bin scroll_data_user.bin test_draw test_draw.tap test_draw_CODE.bin test_draw_data_user.bin bench_scroll bench_scroll.tap bench_scroll_CODE.bin scroll_dirty scroll_dirty.tap scroll_dirty_CODE.bin scroll_dirty_data_user.bin *.o *.map map.bin map_data.h tiles_data.h hud_data.h
+	rm -f scroll scroll.tap scroll_CODE.bin scroll_data_user.bin scroll_code.tap tiles_data.tap contended_data.tap loader.tap tiles_data.bin contended_data.bin tiles_data.o *.o *.map map.bin map_data.h tiles_data.asm tiles_data.h hud_data.h generate_tiles generate_map

@@ -1,22 +1,18 @@
 #include "draw_dirty_edge.h"
 #include <string.h>
 
-// External assembly functions for fast drawing
-extern void draw_aligned_asm(unsigned char *row, unsigned char *map_row, 
-                             const unsigned char *tiles_base, unsigned char in_tile_y);
-extern void draw_shifted_asm(unsigned char *row, unsigned char *map_row, 
-                             const unsigned char *tiles_row, unsigned char shift);
-
-// 32-column drawing functions (defined in draw_dirty_edge.asm)
-extern void draw_aligned_32col_asm(unsigned char *row, unsigned char *map_row,
-                                   const unsigned char *tiles, unsigned char in_tile_y);
-extern void draw_shifted_32col_asm(unsigned char *row, unsigned char *map_row,
-                                   const unsigned char *tiles, unsigned char in_tile_y,
-                                   unsigned char shift);
-
 void dirty_edge_init(void) {
     // Nothing to initialize currently - state is implicit in camera position
 }
+
+static void scroll_x_plus_ring(unsigned char *buffer, unsigned char head_row, const unsigned char *map_data,
+                               const unsigned char *tiles, int camera_x, int camera_y, int map_width);
+static void scroll_x_minus_ring(unsigned char *buffer, unsigned char head_row, const unsigned char *map_data,
+                                const unsigned char *tiles, int camera_x, int camera_y, int map_width);
+static void scroll_y_plus_ring(unsigned char *buffer, unsigned char *head_row, const unsigned char *map_data,
+                               const unsigned char *tiles, int camera_x, int camera_y, int map_width);
+static void scroll_y_minus_ring(unsigned char *buffer, unsigned char *head_row, const unsigned char *map_data,
+                                const unsigned char *tiles, int camera_x, int camera_y, int map_width);
 
 // Full redraw of the 32x12 viewport (256x96 pixels)
 // NOTE: Using memset - scrolling fills in actual tiles
@@ -37,50 +33,90 @@ unsigned char dirty_edge_scroll(
     const unsigned char *map_data,
     const unsigned char *tiles,
     unsigned char *buffer,
+    unsigned char *head,
     int *camera_x,
     int *camera_y,
     int map_width,
     int map_height,
-    unsigned char stride
+    unsigned char stride_x,
+    unsigned char stride_y
 ) {
     int cx = *camera_x;
     int cy = *camera_y;
     unsigned char i;
+    unsigned char h = *head;
+    unsigned char max_stride;
     
-    if (stride == 0) stride = 1;
+    if (stride_x == 0) stride_x = 1;
+    if (stride_y == 0) stride_y = 1;
+    
+    // Determine stride based on which directions are active
+    // For diagonals, use minimum stride to keep X and Y synchronized
+    unsigned char has_x = (direction & (SCROLL_X_PLUS | SCROLL_X_MINUS)) ? 1 : 0;
+    unsigned char has_y = (direction & (SCROLL_Y_PLUS | SCROLL_Y_MINUS)) ? 1 : 0;
+    
+    if (has_x && has_y) {
+        // Diagonal: use minimum stride to keep movements synchronized
+        max_stride = (stride_x < stride_y) ? stride_x : stride_y;
+    } else if (has_x) {
+        // Pure horizontal
+        max_stride = stride_x;
+    } else if (has_y) {
+        // Pure vertical
+        max_stride = stride_y;
+    } else {
+        return 0;
+    }
     
     // Perform stride iterations of single-pixel scrolls
-    for (i = 0; i < stride; i++) {
-        // Check bounds for this iteration
-        if (direction & SCROLL_X_PLUS) {
-            if (cx >= (map_width * 8) - DIRTY_VIEWPORT_WIDTH_PX) break;
-            cx++;
+    for (i = 0; i < max_stride; i++) {
+        unsigned char active_dir = direction;
+        
+        // Check bounds and update camera position, masking out blocked directions
+        if (active_dir & SCROLL_X_PLUS) {
+            if (cx >= (map_width * 8) - DIRTY_VIEWPORT_WIDTH_PX) {
+                active_dir &= ~SCROLL_X_PLUS;
+            } else {
+                cx++;
+            }
         }
-        if (direction & SCROLL_X_MINUS) {
-            if (cx <= 0) break;
-            cx--;
+        if (active_dir & SCROLL_X_MINUS) {
+            if (cx <= 0) {
+                active_dir &= ~SCROLL_X_MINUS;
+            } else {
+                cx--;
+            }
         }
-        if (direction & SCROLL_Y_PLUS) {
-            if (cy >= (map_height * 8) - DIRTY_VIEWPORT_HEIGHT_PX) break;
-            cy++;
+        if (active_dir & SCROLL_Y_PLUS) {
+            if (cy >= (map_height * 8) - DIRTY_VIEWPORT_HEIGHT_PX) {
+                active_dir &= ~SCROLL_Y_PLUS;
+            } else {
+                cy++;
+            }
         }
-        if (direction & SCROLL_Y_MINUS) {
-            if (cy <= 0) break;
-            cy--;
+        if (active_dir & SCROLL_Y_MINUS) {
+            if (cy <= 0) {
+                active_dir &= ~SCROLL_Y_MINUS;
+            } else {
+                cy--;
+            }
         }
         
-        // Apply the scroll operations
-        if (direction & SCROLL_X_PLUS) {
-            scroll_x_plus(buffer, map_data, tiles, cx, cy, map_width);
+        // If no valid direction remains, stop
+        if (active_dir == SCROLL_NONE) break;
+        
+        // Apply the scroll operations for valid directions only
+        if (active_dir & SCROLL_X_PLUS) {
+            scroll_x_plus_ring(buffer, h, map_data, tiles, cx, cy, map_width);
         }
-        if (direction & SCROLL_X_MINUS) {
-            scroll_x_minus(buffer, map_data, tiles, cx, cy, map_width);
+        if (active_dir & SCROLL_X_MINUS) {
+            scroll_x_minus_ring(buffer, h, map_data, tiles, cx, cy, map_width);
         }
-        if (direction & SCROLL_Y_PLUS) {
-            scroll_y_plus(buffer, map_data, tiles, cx, cy, map_width);
+        if (active_dir & SCROLL_Y_PLUS) {
+            scroll_y_plus_ring(buffer, &h, map_data, tiles, cx, cy, map_width);
         }
-        if (direction & SCROLL_Y_MINUS) {
-            scroll_y_minus(buffer, map_data, tiles, cx, cy, map_width);
+        if (active_dir & SCROLL_Y_MINUS) {
+            scroll_y_minus_ring(buffer, &h, map_data, tiles, cx, cy, map_width);
         }
     }
     
@@ -88,6 +124,7 @@ unsigned char dirty_edge_scroll(
     
     *camera_x = cx;
     *camera_y = cy;
+    *head = h;
     return 1;
 }
 
@@ -107,17 +144,24 @@ static unsigned char get_tile_pixel(const unsigned char *tiles, unsigned char ti
 
 // Draw right edge: rightmost pixel column (bit 0 of byte 31 in each row)
 static void draw_edge_right_c(unsigned char *buffer, const unsigned char *map_data,
-                              const unsigned char *tiles, int camera_x, int camera_y, int map_width) {
-    int right_pixel_x = camera_x + 255;
-    int tile_x = right_pixel_x >> 3;
-    unsigned char in_tile_x = right_pixel_x & 7;
+                              const unsigned char *tiles, int camera_x, int camera_y, int map_width,
+                              unsigned char head_row) {
+    // Right pixel X = camera_x + (DIRTY_VIEWPORT_WIDTH_PX - 1)
+    int right_x = camera_x + (DIRTY_VIEWPORT_WIDTH_PX - 1);
+    int tile_x = right_x >> 3;
+    if (tile_x < 0) tile_x = 0;
+    if (tile_x >= map_width) tile_x = map_width - 1;
+    unsigned char in_tile_x = right_x & 7;
     
     int tile_y = camera_y >> 3;
+    if (tile_y < 0) tile_y = 0;
     unsigned char in_tile_y = camera_y & 7;
     
-    unsigned char *row_ptr = buffer + 31;
+    unsigned char row_index = head_row;
+    unsigned char *row_ptr = buffer + ((unsigned int)row_index * 32) + 31;
     const unsigned char *map_ptr = &map_data[tile_y * map_width + tile_x];
     
+    int current_tile_y = tile_y;
     for (int py = 0; py < DIRTY_VIEWPORT_HEIGHT_PX; py++) {
         unsigned char tile_idx = *map_ptr;
         unsigned char pixel = get_tile_pixel(tiles, tile_idx, in_tile_x, in_tile_y);
@@ -129,30 +173,44 @@ static void draw_edge_right_c(unsigned char *buffer, const unsigned char *map_da
         
         if (++in_tile_y == 8) {
             in_tile_y = 0;
-            map_ptr += map_width;
+            current_tile_y++;
+            if (current_tile_y < 48) {
+                map_ptr += map_width;
+            }
         }
-        row_ptr += 32;
+
+        if (++row_index == DIRTY_VIEWPORT_HEIGHT_PX) {
+            row_index = 0;
+            row_ptr = buffer + 31;
+        } else {
+            row_ptr += 32;
+        }
     }
 }
 
 // Draw left edge: leftmost pixel column (bit 7 of byte 0 in each row)
 static void draw_edge_left_c(unsigned char *buffer, const unsigned char *map_data,
-                             const unsigned char *tiles, int camera_x, int camera_y, int map_width) {
+                             const unsigned char *tiles, int camera_x, int camera_y, int map_width,
+                             unsigned char head_row) {
     int tile_x = camera_x >> 3;
+    if (tile_x < 0) tile_x = 0;
+    if (tile_x >= map_width) tile_x = map_width - 1;
     unsigned char in_tile_x = camera_x & 7;
     
     int tile_y = camera_y >> 3;
+    if (tile_y < 0) tile_y = 0;
     unsigned char in_tile_y = camera_y & 7;
     
-    unsigned char *row_ptr = buffer;  // Leftmost byte of each row
+    unsigned char row_index = head_row;
+    unsigned char *row_ptr = buffer + ((unsigned int)row_index * 32);
     const unsigned char *map_ptr = &map_data[tile_y * map_width + tile_x];
     
+    int current_tile_y = tile_y;
     unsigned char py = DIRTY_VIEWPORT_HEIGHT_PX;
     do {
         unsigned char tile_idx = *map_ptr;
         unsigned char pixel = get_tile_pixel(tiles, tile_idx, in_tile_x, in_tile_y);
         
-        // Set or clear bit 7 of leftmost byte
         if (pixel)
             *row_ptr |= 0x80;
         else
@@ -160,38 +218,51 @@ static void draw_edge_left_c(unsigned char *buffer, const unsigned char *map_dat
         
         if (++in_tile_y == 8) {
             in_tile_y = 0;
-            map_ptr += map_width;
+            current_tile_y++;
+            if (current_tile_y < 48) {
+                map_ptr += map_width;
+            }
         }
-        row_ptr += 32;
+
+        if (++row_index == DIRTY_VIEWPORT_HEIGHT_PX) {
+            row_index = 0;
+            row_ptr = buffer;
+        } else {
+            row_ptr += 32;
+        }
     } while (--py);
 }
 
 // Draw bottom edge: bottom scanline (row DIRTY_VIEWPORT_HEIGHT_PX-1, 32 bytes)
 static void draw_edge_bottom_c(unsigned char *buffer, const unsigned char *map_data,
-                               const unsigned char *tiles, int camera_x, int camera_y, int map_width) {
+                               const unsigned char *tiles, int camera_x, int camera_y, int map_width,
+                               unsigned char head_row) {
     // Bottom pixel Y = camera_y + (DIRTY_VIEWPORT_HEIGHT_PX - 1)
     int bottom_y = camera_y + (DIRTY_VIEWPORT_HEIGHT_PX - 1);
     int tile_y = bottom_y >> 3;
+    if (tile_y < 0) tile_y = 0;
     unsigned char in_tile_y = bottom_y & 7;
+    
     int tile_x = camera_x >> 3;
+    if (tile_x < 0) tile_x = 0;
+    if (tile_x >= map_width) tile_x = map_width - 1;
     unsigned char in_tile_x = camera_x & 7;
     
-    unsigned char *row_ptr = buffer + ((DIRTY_VIEWPORT_HEIGHT_PX - 1) * 32);  // Last row
+    unsigned char bottom_row = head_row + (DIRTY_VIEWPORT_HEIGHT_PX - 1);
+    if (bottom_row >= DIRTY_VIEWPORT_HEIGHT_PX) bottom_row -= DIRTY_VIEWPORT_HEIGHT_PX;
+    unsigned char *row_ptr = buffer + ((unsigned int)bottom_row * 32);
     const unsigned char *map_ptr = &map_data[tile_y * map_width + tile_x];
     
     // Draw 32 bytes (one scanline) using C loop
     for (unsigned char col = 0; col < 32; col++) {
-        unsigned char tile_idx = map_ptr[col + (in_tile_x ? 1 : 0)];
-        unsigned char prev_tile = col > 0 ? map_ptr[col - 1 + (in_tile_x ? 1 : 0)] : map_ptr[col];
-        
         if (in_tile_x == 0) {
             // Aligned: just get the byte directly
-            tile_idx = map_ptr[col];
+            unsigned char tile_idx = map_ptr[col];
             row_ptr[col] = tiles[tile_idx * 8 + in_tile_y];
         } else {
             // Shifted: blend two tiles
             unsigned char left_tile = map_ptr[col];
-            unsigned char right_tile = map_ptr[col + 1];
+            unsigned char right_tile = (tile_x + (int)col + 1 < map_width) ? map_ptr[col + 1] : left_tile;
             unsigned char left_byte = tiles[left_tile * 8 + in_tile_y];
             unsigned char right_byte = tiles[right_tile * 8 + in_tile_y];
             row_ptr[col] = (left_byte << in_tile_x) | (right_byte >> (8 - in_tile_x));
@@ -201,13 +272,18 @@ static void draw_edge_bottom_c(unsigned char *buffer, const unsigned char *map_d
 
 // Draw top edge: top scanline (row 0, 32 bytes)
 static void draw_edge_top_c(unsigned char *buffer, const unsigned char *map_data,
-                            const unsigned char *tiles, int camera_x, int camera_y, int map_width) {
-    int tile_y = camera_y >> 3;
-    unsigned char in_tile_y = camera_y & 7;
+                            const unsigned char *tiles, int camera_x, int camera_y, int map_width,
+                            unsigned char head_row) {
     int tile_x = camera_x >> 3;
+    if (tile_x < 0) tile_x = 0;
+    if (tile_x >= map_width) tile_x = map_width - 1;
     unsigned char in_tile_x = camera_x & 7;
     
-    unsigned char *row_ptr = buffer;  // Row 0
+    int tile_y = camera_y >> 3;
+    if (tile_y < 0) tile_y = 0;
+    unsigned char in_tile_y = camera_y & 7;
+    
+    unsigned char *row_ptr = buffer + ((unsigned int)head_row * 32);
     const unsigned char *map_ptr = &map_data[tile_y * map_width + tile_x];
     
     // Draw 32 bytes (one scanline) using C loop
@@ -217,7 +293,7 @@ static void draw_edge_top_c(unsigned char *buffer, const unsigned char *map_data
             row_ptr[col] = tiles[tile_idx * 8 + in_tile_y];
         } else {
             unsigned char left_tile = map_ptr[col];
-            unsigned char right_tile = map_ptr[col + 1];
+            unsigned char right_tile = (tile_x + (int)col + 1 < map_width) ? map_ptr[col + 1] : left_tile;
             unsigned char left_byte = tiles[left_tile * 8 + in_tile_y];
             unsigned char right_byte = tiles[right_tile * 8 + in_tile_y];
             row_ptr[col] = (left_byte << in_tile_x) | (right_byte >> (8 - in_tile_x));
@@ -225,58 +301,34 @@ static void draw_edge_top_c(unsigned char *buffer, const unsigned char *map_data
     }
 }
 
-// C implementation of shift left
-static void shift_buffer_left_1px_c(unsigned char *buffer) {
-    unsigned char *rowptr = buffer;
-    for (int row = 0; row < DIRTY_VIEWPORT_HEIGHT_PX; row++) {
-        unsigned char carry = 0;
-        for (int col = 31; col >= 0; col--) {
-            unsigned char newcarry = rowptr[col] >> 7;
-            rowptr[col] = (rowptr[col] << 1) | carry;
-            carry = newcarry;
-        }
-        rowptr += 32;
-    }
+static void scroll_x_plus_ring(unsigned char *buffer, unsigned char head_row, const unsigned char *map_data,
+                               const unsigned char *tiles, int camera_x, int camera_y, int map_width) {
+    shift_buffer_left_1px(buffer);
+    draw_edge_right_c(buffer, map_data, tiles, camera_x, camera_y, map_width, head_row);
 }
 
-// C implementation of shift right
-static void shift_buffer_right_1px_c(unsigned char *buffer) {
-    unsigned char *rowptr = buffer;
-    for (int row = 0; row < DIRTY_VIEWPORT_HEIGHT_PX; row++) {
-        unsigned char carry = 0;
-        for (int col = 0; col < 32; col++) {
-            unsigned char newcarry = rowptr[col] & 1;
-            rowptr[col] = (rowptr[col] >> 1) | (carry << 7);
-            carry = newcarry;
-        }
-        rowptr += 32;
-    }
+static void scroll_x_minus_ring(unsigned char *buffer, unsigned char head_row, const unsigned char *map_data,
+                                const unsigned char *tiles, int camera_x, int camera_y, int map_width) {
+    shift_buffer_right_1px(buffer);
+    draw_edge_left_c(buffer, map_data, tiles, camera_x, camera_y, map_width, head_row);
 }
 
-// Scroll right (+X): shift buffer left, draw right edge
-void scroll_x_plus(unsigned char *buffer, const unsigned char *map_data,
-                   const unsigned char *tiles, int camera_x, int camera_y, int map_width) {
-    shift_buffer_left_1px(buffer);  // Assembly version
-    draw_edge_right_c(buffer, map_data, tiles, camera_x, camera_y, map_width);
+static void scroll_y_plus_ring(unsigned char *buffer, unsigned char *head_row, const unsigned char *map_data,
+                               const unsigned char *tiles, int camera_x, int camera_y, int map_width) {
+    (void)buffer;
+    unsigned char h = *head_row;
+    h++;
+    if (h == DIRTY_VIEWPORT_HEIGHT_PX) h = 0;
+    *head_row = h;
+    draw_edge_bottom_c(buffer, map_data, tiles, camera_x, camera_y, map_width, h);
 }
 
-// Scroll left (-X): shift buffer right, draw left edge  
-void scroll_x_minus(unsigned char *buffer, const unsigned char *map_data,
-                    const unsigned char *tiles, int camera_x, int camera_y, int map_width) {
-    shift_buffer_right_1px(buffer);  // Assembly version
-    draw_edge_left_c(buffer, map_data, tiles, camera_x, camera_y, map_width);
-}
-
-// Scroll down (+Y): shift buffer up, draw bottom edge
-void scroll_y_plus(unsigned char *buffer, const unsigned char *map_data,
-                   const unsigned char *tiles, int camera_x, int camera_y, int map_width) {
-    shift_buffer_up_1row(buffer);
-    draw_edge_bottom_c(buffer, map_data, tiles, camera_x, camera_y, map_width);
-}
-
-// Scroll up (-Y): shift buffer down, draw top edge
-void scroll_y_minus(unsigned char *buffer, const unsigned char *map_data,
-                    const unsigned char *tiles, int camera_x, int camera_y, int map_width) {
-    shift_buffer_down_1row(buffer);
-    draw_edge_top_c(buffer, map_data, tiles, camera_x, camera_y, map_width);
+static void scroll_y_minus_ring(unsigned char *buffer, unsigned char *head_row, const unsigned char *map_data,
+                                const unsigned char *tiles, int camera_x, int camera_y, int map_width) {
+    (void)buffer;
+    unsigned char h = *head_row;
+    if (h == 0) h = DIRTY_VIEWPORT_HEIGHT_PX;
+    h--;
+    *head_row = h;
+    draw_edge_top_c(buffer, map_data, tiles, camera_x, camera_y, map_width, h);
 }

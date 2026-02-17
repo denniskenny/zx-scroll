@@ -90,19 +90,20 @@ int main(int argc, char **argv) {
     int tiles_y = height / tile_h;
     int tile_count = tiles_x * tiles_y;
 
+    // Determine output mode from file extension
+    size_t out_len = strlen(out_path);
+    int asm_mode = (out_len >= 4 && strcmp(out_path + out_len - 4, ".asm") == 0);
+
     FILE *out = fopen(out_path, "w");
     if (!out) {
         perror("fopen output");
         return 1;
     }
 
-    fprintf(out, "#ifndef TILES_DATA_H\n");
-    fprintf(out, "#define TILES_DATA_H\n\n");
-    fprintf(out, "#define TILE_COUNT %d\n", tile_count);
-    fprintf(out, "#define TILE_BYTES_PER_TILE 8\n\n");
-    fprintf(out, "extern const unsigned char tiles[];\n\n");
-    fprintf(out, "#ifdef TILES_DATA_IMPLEMENTATION\n");
-    fprintf(out, "const unsigned char tiles[] = {\n");
+    // Collect all tile bytes first
+    int total_bytes = tile_count * 8;
+    unsigned char *tile_bytes = (unsigned char *)malloc(total_bytes);
+    if (!tile_bytes) die("Error: out of memory");
 
     int byte_index = 0;
     for (int ty = 0; ty < tiles_y; ++ty) {
@@ -116,29 +117,61 @@ int main(int argc, char **argv) {
                         b |= (unsigned char)(0x80u >> px);
                     }
                 }
-
-                if ((byte_index % 16) == 0) {
-                    fprintf(out, "    ");
-                }
-                fprintf(out, "0x%02X", b);
-                byte_index++;
-                if (byte_index != tile_count * 8) {
-                    fprintf(out, ", ");
-                }
-                if ((byte_index % 16) == 0) {
-                    fprintf(out, "\n");
-                }
+                tile_bytes[byte_index++] = b;
             }
         }
     }
 
-    if ((byte_index % 16) != 0) {
-        fprintf(out, "\n");
+    if (asm_mode) {
+        // Assembly output: raw DEFB data (no section/public - standalone binary)
+        fprintf(out, "; tiles_data.asm - Generated tile data\n");
+        fprintf(out, "; %d tiles, %d bytes total\n", tile_count, total_bytes);
+        fprintf(out, "; Assembled standalone, loaded to contended RAM by BASIC loader\n\n");
+        fprintf(out, "    ORG $6000\n\n");
+        fprintf(out, "_tiles:\n");
+        for (int i = 0; i < total_bytes; i++) {
+            if ((i % 16) == 0) {
+                fprintf(out, "    DEFB ");
+            }
+            fprintf(out, "$%02X", tile_bytes[i]);
+            if (i == total_bytes - 1) {
+                fprintf(out, "\n");
+            } else if ((i % 16) == 15) {
+                fprintf(out, "\n");
+            } else {
+                fprintf(out, ", ");
+            }
+        }
+    } else {
+        // C header output (original format)
+        fprintf(out, "#ifndef TILES_DATA_H\n");
+        fprintf(out, "#define TILES_DATA_H\n\n");
+        fprintf(out, "#define TILE_COUNT %d\n", tile_count);
+        fprintf(out, "#define TILE_BYTES_PER_TILE 8\n\n");
+        fprintf(out, "extern const unsigned char tiles[];\n\n");
+        fprintf(out, "#ifdef TILES_DATA_IMPLEMENTATION\n");
+        fprintf(out, "const unsigned char tiles[] = {\n");
+        for (int i = 0; i < total_bytes; i++) {
+            if ((i % 16) == 0) {
+                fprintf(out, "    ");
+            }
+            fprintf(out, "0x%02X", tile_bytes[i]);
+            if (i != total_bytes - 1) {
+                fprintf(out, ", ");
+            }
+            if ((i % 16) == 15) {
+                fprintf(out, "\n");
+            }
+        }
+        if ((total_bytes % 16) != 0) {
+            fprintf(out, "\n");
+        }
+        fprintf(out, "};\n");
+        fprintf(out, "#endif\n\n");
+        fprintf(out, "#endif\n");
     }
 
-    fprintf(out, "};\n");
-    fprintf(out, "#endif\n\n");
-    fprintf(out, "#endif\n");
+    free(tile_bytes);
 
     fclose(out);
 

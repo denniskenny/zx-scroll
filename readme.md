@@ -4,10 +4,16 @@ A simple tilemap scroller for the ZX Spectrum, written in C using Z88DK.
 
 ## Controls
 
-- O: Scroll left
-- P: Scroll right
-- Q: Scroll up
-- A: Scroll down
+### Keyboard
+- **O**: Scroll left
+- **P**: Scroll right
+- **Q**: Scroll up
+- **A**: Scroll down
+- Diagonal movement supported (e.g., Q+P for up-right)
+
+### Kempston Joystick
+- Fully supported via z88dk's `in_stick_kempston()` function
+- Keyboard takes priority when both inputs are active
 
 ## Building
 
@@ -56,17 +62,19 @@ Example:
 0xFFFF  +-------------------------------+
         | Stack (grows downward)        |
         |                               |
-0xF000  +-------------------------------+
-        | Offscreen buffer (2KB)        |  (OFFSCREEN_BUFFER_ORG=0xF000)
-        | _offscreen_buffer             |
-0xE800  +-------------------------------+
-        | Free RAM / heap / data        |
-        |                               |
 0x8000  +-------------------------------+
-        | Program CODE + data (z88dk)   |  (CFLAGS: -zorg=32768)
-        | scroll.tap / bench_scroll.tap |
+        | Program CODE/RODATA/BSS       |  (scroll_CODE.bin, org=0x8000)
+        |                               |
+0x7FFF  +-------------------------------+
+        | Contended RAM (free)          |
+0x7A00  +-------------------------------+
+        | Map data (4608 bytes)         |  (_map_data = 0x6800)
+0x6800  +-------------------------------+
+        | Tile data (2048 bytes)        |  (_tiles = 0x6000)
 0x6000  +-------------------------------+
-        | System vars / contended area  |
+        | BASIC workspace (loader)      |  (CLEAR 24575 / 0x5FFF)
+0x5C00  +-------------------------------+
+        | System vars                   |
 0x5B00  +-------------------------------+
         | Attributes (768 bytes)        |
 0x5800  +-------------------------------+
@@ -76,11 +84,74 @@ Example:
 0x0000  +-------------------------------+
 
 Notes:
-- If `OFFSCREEN_BUFFER_ORG` is set to `0xD000` (default), the offscreen buffer
-  lives in the 0xD000 region instead of 0xF000.
-- Embedded assets (e.g. `hud.scr`) are linked into the program image (they are
-  not fixed to a specific address).
+- The `scroll.tap` image is built from 3 concatenated tape blocks:
+  - `loader.tap` (BASIC loader)
+  - `contended_data.tap` (tiles + map loaded to 0x6000)
+  - `scroll_code.tap` (main program loaded to 0x8000)
+- `tiles` and `map_data` are loaded into contended RAM at fixed addresses.
+- The HUD (`hud.scr`) remains linked into the main program image.
 ```
+
+## Linker section summary (scroll.map)
+
+Built with `zcc ... -m`, the main program image (loaded at `0x8000`) uses:
+
+- **CODE (C compiler)**
+  - `__code_compiler_head = 0x80FB`
+  - `__code_compiler_size = 0x0896` (2198 bytes)
+  - `__code_compiler_tail = 0x8991`
+- **CODE (user asm)**
+  - `__code_user_head = 0x8991`
+  - `__code_user_size = 0x07C1` (1985 bytes)
+  - `__code_user_tail = 0x9152`
+- **RODATA (user)**
+  - `__rodata_user_head = 0x915B`
+  - `__rodata_user_size = 0x1B00` (6912 bytes)  (`hud.scr`)
+  - `__rodata_user_tail = 0xAC5B`
+- **BSS (user)**
+  - `__bss_user_head = 0xAD6F`
+  - `__bss_user_size = 0x0C00` (3072 bytes)  (`offscreen_buffer_32x16`)
+  - `__bss_user_tail = 0xB96F`
+
+Fixed-address data loaded by the BASIC loader:
+
+- **`_tiles = 0x6000`** (2048 bytes)
+- **`_map_data = 0x6800`** (4608 bytes)
+
+## Performance / Optimisations
+
+### Runtime (frame-time)
+
+- **Dirty-edge scrolling**
+  The viewport buffer is shifted by 1px/8px and only the newly exposed edge is drawn, avoiding a full redraw.
+
+- **Assembly shift routines** (`draw_dirty_edge.asm`)
+  - 1px horizontal shifts are fully unrolled per row.
+  - 8px shifts use byte copies (`LDIR`/`LDDR`) where possible.
+  - Vertical shifts use large block copies (`LDIR`/`LDDR`).
+
+- **Optimized blit to screen** (`copy_viewport_32x16.asm`)
+  - Unrolled `LDI` copies per scanline.
+  - Precomputed screen address table (avoids Spectrum bitmap address arithmetic in the hot loop).
+
+- **Beam timing / frame sync** (`scroll.c`)
+  Uses floating-bus sync to time the blit and reduce tearing.
+  When idle (no input and nothing to blit) the loop uses `HALT` to minimize CPU usage.
+
+### Memory / layout
+
+- **Multi-block TAP with contended data**
+  `scroll.tap` is composed of:
+  - `loader.tap` (BASIC)
+  - `contended_data.tap` (loaded to `0x6000`)
+  - `scroll_code.tap` (loaded to `0x8000`)
+
+  This moves static data out of the main program image:
+  - `tiles` at `0x6000`
+  - `map_data` at `0x6800` (used in-place, no runtime copy)
+
+- **Dead code removed from main build**
+  Older fullscreen renderer sources are preserved under `fullscreen/` but not linked into the scrolling build.
 
 ## Requirements
 
@@ -181,6 +252,15 @@ Instead of redrawing the entire viewport each frame, dirty-edge scrolling:
 
 This dramatically reduces the amount of tile rendering needed per frame.
 
+### Ring-Buffer Optimization
+
+The vertical scrolling uses a **ring-buffer** approach for maximum performance:
+- **Vertical scrolling**: Updates `head_row` pointer instead of physically shifting 3072 bytes
+- **Ring-buffer blitter**: `copy_viewport_32x16_to_screen_ring()` blits buffer in two segments based on `head_row`
+- **Horizontal scrolling**: Still uses physical buffer shifts but benefits from ring-aware edge drawing
+
+This eliminates expensive `LDIR`/`LDDR` operations for vertical movement, significantly improving performance.
+
 ### Viewport
 
 - **Size:** 32x12 characters (256x96 pixels)
@@ -191,20 +271,28 @@ This dramatically reduces the amount of tile rendering needed per frame.
 
 ```c
 // Scroll by stride pixels in direction, draw new edges
+// stride_x: horizontal scroll speed (pixels per frame)
+// stride_y: vertical scroll speed (pixels per frame)
+// For diagonals, uses min(stride_x, stride_y) to keep movements synchronized
 unsigned char dirty_edge_scroll(
     unsigned char direction,      // SCROLL_X_PLUS, SCROLL_X_MINUS, etc.
     const unsigned char *map_data,
     const unsigned char *tiles,
     unsigned char *buffer,
+    unsigned char *head,          // Ring-buffer head row pointer
     int *camera_x,
     int *camera_y,
     int map_width,
     int map_height,
-    unsigned char stride          // Pixels to scroll (1-255)
+    unsigned char stride_x,       // Horizontal scroll speed (e.g., 4)
+    unsigned char stride_y        // Vertical scroll speed (e.g., 2)
 );
 
-// Blit buffer to screen
+// Blit buffer to screen (linear mode)
 void copy_viewport_32x16_to_screen(unsigned char *buffer);
+
+// Blit buffer to screen (ring-buffer mode - optimized)
+void copy_viewport_32x16_to_screen_ring(unsigned char *buffer, unsigned char head_row);
 ```
 
 ### Direction Flags
@@ -220,11 +308,16 @@ Diagonal scrolling is supported by combining flags (e.g., `SCROLL_X_PLUS | SCROL
 
 ### Assembly Optimizations
 
-#### 1-Pixel Shift Routines (Fully Unrolled)
-- **`shift_buffer_left_1px`** - 32x `RL (HL)` unrolled per row, EXX for row counter
-- **`shift_buffer_right_1px`** - 32x `RR (HL)` unrolled per row, EXX for row counter
-- **`shift_buffer_up_1row`** - Fast `LDIR` block copy (3040 bytes)
-- **`shift_buffer_down_1row`** - Fast `LDDR` block copy (3040 bytes)
+#### Horizontal Shift Routines (Physical Buffer Shifts)
+- **`shift_buffer_left_1px`** - 32x `RL (HL)` unrolled per row, EXX for row counter (~75,000 cycles)
+- **`shift_buffer_right_1px`** - 32x `RR (HL)` unrolled per row, EXX for row counter (~75,000 cycles)
+
+#### Vertical Scrolling (Ring-Buffer Optimization)
+- **Vertical scroll**: Updates `head_row` pointer only (no buffer shift) - **~100 cycles**
+- **`shift_buffer_up_1row`** - Available but not used (LDIR 3040 bytes, ~61,000 cycles)
+- **`shift_buffer_down_1row`** - Available but not used (LDDR 3040 bytes, ~61,000 cycles)
+
+The ring-buffer approach makes vertical scrolling **~600x faster** than physical buffer shifts.
 
 #### 8-Pixel Shift Routines (Byte-Aligned, No Bit Shifts)
 - **`shift_buffer_left_8px`** - `LDIR` 31 bytes/row, ~8x faster than 8 single shifts
@@ -232,8 +325,12 @@ Diagonal scrolling is supported by combining flags (e.g., `SCROLL_X_PLUS | SCROL
 - **`shift_buffer_up_8rows`** - Single `LDIR` of 2816 bytes
 - **`shift_buffer_down_8rows`** - Single `LDDR` of 2816 bytes
 
-#### Viewport Blit
-- 32x unrolled `LDI` per scanline
+#### Viewport Blit (Ring-Buffer Aware)
+- **`copy_viewport_32x16_to_screen_ring`** - Ring-buffer aware blitter
+  - Splits buffer into two segments based on `head_row`
+  - Segment A: rows from `head_row` to end of buffer
+  - Segment B: rows from start of buffer to `head_row`
+  - Each segment uses 32x unrolled `LDI` per scanline
 - Precomputed screen address table for Spectrum's non-linear layout
 - EXX for table pointer management
 
@@ -246,12 +343,38 @@ Diagonal scrolling is supported by combining flags (e.g., `SCROLL_X_PLUS | SCROL
 | Horizontal 8-pixel shift | ~62,000 | LDIR 31 bytes × 96 rows |
 | Vertical 8-row shift | ~57,000 | LDIR 2816 bytes |
 
+### Input System
+
+The input system uses **z88dk's standard input library** for both keyboard and joystick:
+
+```c
+// Keyboard input via in_key_pressed()
+if (in_key_pressed(IN_KEY_SCANCODE_q)) direction |= SCROLL_Y_MINUS;
+if (in_key_pressed(IN_KEY_SCANCODE_a)) direction |= SCROLL_Y_PLUS;
+if (in_key_pressed(IN_KEY_SCANCODE_o)) direction |= SCROLL_X_MINUS;
+if (in_key_pressed(IN_KEY_SCANCODE_p)) direction |= SCROLL_X_PLUS;
+
+// Kempston joystick via in_stick_kempston()
+uint16_t joy = in_stick_kempston();
+if (joy & IN_STICK_UP)    direction |= SCROLL_Y_MINUS;
+if (joy & IN_STICK_DOWN)  direction |= SCROLL_Y_PLUS;
+if (joy & IN_STICK_LEFT)  direction |= SCROLL_X_MINUS;
+if (joy & IN_STICK_RIGHT) direction |= SCROLL_X_PLUS;
+```
+
+Benefits:
+- No custom assembly keyboard routines needed
+- Automatic support for multiple input devices
+- Well-tested and maintained by z88dk
+- Easy to add support for other joystick types (Sinclair, Cursor, etc.)
+
 ### Files
 
 - `draw_dirty_edge.h` - API declarations and constants
-- `draw_dirty_edge.c` - Scroll handlers, edge drawing functions
+- `draw_dirty_edge.c` - Scroll handlers, edge drawing functions, ring-buffer logic
 - `draw_dirty_edge.asm` - Assembly shift routines (1px and 8px)
-- `copy_viewport_32x16.asm` - Viewport blit and buffer allocation
+- `copy_viewport_32x16.asm` - Ring-buffer aware viewport blit and buffer allocation
+- `scroll.c` - Main loop, input handling, frame timing
 - `test_scroll.c` - Performance test framework
 
 ## Viewport copy (128-bit write optimization)

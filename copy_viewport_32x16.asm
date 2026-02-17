@@ -5,6 +5,7 @@
     SECTION code_user
 
     PUBLIC _copy_viewport_32x16_to_screen
+    PUBLIC _copy_viewport_32x16_to_screen_ring
     EXTERN _offscreen_buffer_32x16
 
 ; Screen constants
@@ -60,6 +61,94 @@ copy_loop_32x16:
     pop bc
     djnz copy_loop_32x16
     
+    pop ix
+    ei
+    ret
+
+_copy_viewport_32x16_to_screen_ring:
+    di
+
+    push ix
+    ld ix, 0
+    add ix, sp
+
+    ld l, (ix+4)
+    ld h, (ix+5)             ; HL = base buffer
+    ld a, (ix+6)             ; A = head_row
+
+    push hl                  ; save base buffer for wrap segment
+
+    ; HL = buffer + (head_row * 32)
+    ld e, a
+    ld d, 0
+    ex de, hl                ; HL = head_row
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    add hl, hl               ; HL = head_row * 32
+    ex de, hl                ; DE = head_row * 32, HL = base buffer
+    add hl, de               ; HL = buffer + head_row*32
+
+    ; Use alternate HL' for table pointer
+    exx
+    ld hl, scr_addr_table_32x16
+    exx
+    
+    ; segment A: rows_a = 96 - head_row
+    ld a, (ix+6)
+    ld c, a                 ; C = head_row
+    ld a, 96
+    sub c
+    ld b, a                 ; B = rows_a
+    jr z, _ring_seg_b
+
+_ring_loop_a:
+    push bc
+
+    exx
+    ld e, (hl)
+    inc hl
+    ld d, (hl)
+    inc hl
+    push de
+    exx
+    pop de
+
+    REPT 32
+    ldi
+    ENDR
+
+    pop bc
+    djnz _ring_loop_a
+
+_ring_seg_b:
+    pop hl                  ; HL = base buffer
+    ld a, (ix+6)
+    ld b, a                 ; rows_b = head_row
+    or a                    ; test if B is zero
+    jr z, _ring_done
+
+_ring_loop_b:
+    push bc
+
+    exx
+    ld e, (hl)
+    inc hl
+    ld d, (hl)
+    inc hl
+    push de
+    exx
+    pop de
+
+    REPT 32
+    ldi
+    ENDR
+
+    pop bc
+    djnz _ring_loop_b
+
+_ring_done:
     pop ix
     ei
     ret
