@@ -11,9 +11,9 @@
     PUBLIC _shift_buffer_right_1px_rows
 
 ; Constants
-VIEWPORT_WIDTH_BYTES    EQU 32      ; 256 pixels / 8 = 32 bytes per scanline
+VIEWPORT_WIDTH_BYTES    EQU 33      ; 33 bytes per scanline (32 visible + 1 for ring-buffer)
 VIEWPORT_HEIGHT_ROWS    EQU 96      ; 96 pixel rows
-BUFFER_SIZE             EQU 3072    ; 32 * 96
+BUFFER_SIZE             EQU 3168    ; 33 * 96
 
 ;------------------------------------------------------------------------------
 ; shift_buffer_left_1px - Shift entire buffer left by 1 pixel
@@ -31,7 +31,7 @@ _shift_buffer_left_1px:
     exx
     
 shift_left_row_loop:
-    ; Move to last byte of row (byte 31)
+    ; Move to last visible byte of row (byte 31, not 32 which is ring-buffer byte)
     ld de, 31
     add hl, de           ; HL points to byte 31
     
@@ -39,6 +39,7 @@ shift_left_row_loop:
     or a
     
     ; Fully unrolled 32-byte shift left (right-to-left for carry chain)
+    ; Only shift the 32 visible bytes, not the 33rd ring-buffer byte
     rl (hl) \ dec hl
     rl (hl) \ dec hl
     rl (hl) \ dec hl
@@ -70,12 +71,12 @@ shift_left_row_loop:
     rl (hl) \ dec hl
     rl (hl) \ dec hl
     rl (hl) \ dec hl
-    rl (hl)              ; last byte, no dec needed
+    rl (hl)              ; last byte (byte 0), no dec needed
     
-    ; HL now points to byte 0, advance to next row (add 32)
+    ; HL now points to byte 0, advance to next row (add 33)
     inc hl               ; HL = byte 1
-    ld de, 31
-    add hl, de           ; HL = byte 32 (start of next row)
+    ld de, 32
+    add hl, de           ; HL = byte 33 (start of next row)
     
     ; Decrement row counter (stay in main regs, use exx/dec/exx)
     exx
@@ -206,6 +207,7 @@ shift_right_row_loop:
     or a
     
     ; Fully unrolled 32-byte shift right (left-to-right for carry chain)
+    ; Only shift the 32 visible bytes, not the 33rd ring-buffer byte
     rr (hl) \ inc hl
     rr (hl) \ inc hl
     rr (hl) \ inc hl
@@ -237,10 +239,11 @@ shift_right_row_loop:
     rr (hl) \ inc hl
     rr (hl) \ inc hl
     rr (hl) \ inc hl
-    rr (hl)              ; last byte, no inc needed - HL at byte 31
+    rr (hl)              ; last byte (byte 31), no inc needed
     
-    ; Advance to next row
-    inc hl               ; HL = start of next row
+    ; Advance to next row (skip the ring-buffer byte)
+    inc hl               ; HL = byte 32 (ring-buffer byte)
+    inc hl               ; HL = byte 33 (start of next row)
     
     ; Decrement row counter (stay in main regs, use exx/dec/exx)
     exx

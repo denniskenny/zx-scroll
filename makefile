@@ -39,8 +39,8 @@ contended_data.bin: tiles_data.bin map.bin
 	cat tiles_data.bin map.bin > contended_data.bin
 
 # Build main program (tiles_extern.asm provides _tiles=$6000, _map_data=$6800)
-scroll_CODE.bin: scroll.c draw_dirty_edge.c draw_dirty_edge.asm copy_viewport_32x16.asm tiles_extern.asm hud_data.asm hud.scr
-	PATH=$(Z88DK)/bin:$$PATH Z88DK=$(Z88DK) ZCCCFG=$(ZCCCFG) $(ZCC) $(CFLAGS) $(USER_CFLAGS) -o scroll scroll.c draw_dirty_edge.c draw_dirty_edge.asm copy_viewport_32x16.asm tiles_extern.asm hud_data.asm -lm
+scroll_CODE.bin: scroll.c draw_dirty_edge.c copy_viewport_32x16.asm tiles_extern.asm hud_data.asm hud.scr
+	PATH=$(Z88DK)/bin:$$PATH Z88DK=$(Z88DK) ZCCCFG=$(ZCCCFG) $(ZCC) $(CFLAGS) $(USER_CFLAGS) -o scroll scroll.c draw_dirty_edge.c copy_viewport_32x16.asm tiles_extern.asm hud_data.asm -lm
 
 # Build tap: BASIC loader + contended data at 0x6000 + main code at 0x8000
 scroll.tap: scroll_CODE.bin contended_data.bin

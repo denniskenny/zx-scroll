@@ -39,37 +39,19 @@ static unsigned char read_keys(void) {
 #define MAP_WIDTH 96
 #define MAP_HEIGHT 48
 
-void copy_viewport_32x16_to_screen(unsigned char *buffer);
-void copy_viewport_32x16_to_screen_ring(unsigned char *buffer, unsigned char head_row);
+void copy_viewport_32x16_to_screen_ring_2d(unsigned char *buffer, unsigned char head_row, unsigned char head_col, unsigned char fine_x);
 void load_scr_to_screen(const unsigned char *scr);
 
 extern const unsigned char hud_scr[];
 
-// 32x16 viewport buffer for dirty-edge scrolling (256x128 pixels)
+// 32x12 viewport buffer for dirty-edge scrolling (256x96 pixels)
 extern unsigned char offscreen_buffer_32x16[];
 
 int camera_x = 0;
 int camera_y = 0;
 unsigned char head_row = 0;
-
-static unsigned char floating_bus_wait(void) __naked {
-    __asm
-        ld b, #0x09
-        ld c, #0x80
-    _fb_wt:
-        in a, (#0xFF)
-        cp b
-        jr z, _fb_ok
-        dec c
-        jr nz, _fb_wt
-        ld l, #0x00
-        jr _fb_dn
-    _fb_ok:
-        ld l, #0x01
-    _fb_dn:
-        ret
-    __endasm;
-}
+unsigned char head_col = 0;  // Horizontal ring-buffer offset (0-32)
+unsigned char fine_x = 0;   // Sub-byte pixel offset (0-7)
 
 void load_scr_to_screen(const unsigned char *scr) {
     __asm
@@ -91,16 +73,18 @@ void clear_viewport_attrs(void) {
     memset(attr, PAPER_BLACK | INK_WHITE, 12 * 32);
 }
 
-// Draw one scanline of tilemap
-static void draw_scanline(unsigned char *dst, const unsigned char *map_row, unsigned char in_tile_y) {
+// Draw one scanline of tilemap (33 bytes: 32 visible + 1 lookahead for fine_x blending)
+static void draw_scanline(unsigned char *dst, const unsigned char *map_row, unsigned char in_tile_y, unsigned char start_col) {
     unsigned char col;
-    for (col = 0; col < 32; col++) {
-        unsigned char tile_idx = map_row[col];
+    for (col = 0; col < 33; col++) {
+        unsigned char map_col = start_col + col;
+        if (map_col >= MAP_WIDTH) map_col = MAP_WIDTH - 1;  // Clamp to last tile
+        unsigned char tile_idx = map_row[map_col];
         dst[col] = tiles[(tile_idx << 3) + in_tile_y];
     }
 }
 
-// Draw initial tilemap to buffer
+// Draw initial tilemap to buffer (33-byte rows for horizontal ring-buffer)
 void draw_initial_tilemap(void) {
     unsigned char *row_ptr = offscreen_buffer_32x16;
     const unsigned char *map_row = map_data;
@@ -108,8 +92,8 @@ void draw_initial_tilemap(void) {
     unsigned char py;
     
     for (py = 0; py < 96; py++) {
-        draw_scanline(row_ptr, map_row, in_tile_y);
-        row_ptr += 32;
+        draw_scanline(row_ptr, map_row, in_tile_y, 0);  // Start at column 0
+        row_ptr += 33;  // Buffer is now 33 bytes wide (32 visible + 1 for ring-buffer)
         if (++in_tile_y == 8) {
             in_tile_y = 0;
             map_row += MAP_WIDTH;
@@ -122,51 +106,56 @@ int main(void) {
     
     load_scr_to_screen(hud_scr);
     clear_viewport_attrs();
+    
     draw_initial_tilemap();
     
-    // Floating bus: set unique attribute at row 23 for sync detection
-    *((unsigned char *)0x5AE0) = 0x09;
+    // Use 2D ring blitter for initial render
+    copy_viewport_32x16_to_screen_ring_2d(offscreen_buffer_32x16, head_row, head_col, fine_x);
     
-    // Beam-chasing main loop:
-    // 1. Wait for beam past viewport (floating bus sync)
-    // 2. Blit to screen (beam in bottom border/HUD - safe zone)
-    // 3. Read input (free time while beam in border)
-    // 4. Scroll + edge draw (free time while beam in top border/HUD)
-    // 5. Loop (no HALT needed if floating bus syncs; HALT as fallback)
+    // Frame-synced main loop:
+    // 1. HALT to sync to frame interrupt (top border start - reliable)
+    // 2. Read input (fast, during top border)
+    // 3. Scroll + edge draw (during top border + lines 0-47)
+    // 4. Blit to screen (beam reaches viewport Y=48 ~25000T after HALT)
+    //    We race the beam: write from top of viewport downward
     
-    // First frame always needs blit
     unsigned char need_blit = 1;
     
     while (1) {
-        unsigned char direction = SCROLL_NONE;
-        unsigned char fb_ok = 0;
+        unsigned char direction;
         
-        // Step 3: Read input (beam in bottom border - free time)
+        // Step 1: Sync to frame start
+        intrinsic_halt();
+        
+        // Step 2: Read input (fast, ~500T)
         direction = read_keys();
 
-        // Idle fast-path: if nothing changed and no input, sleep (lowest CPU)
-        if (!need_blit && direction == SCROLL_NONE) {
-            intrinsic_halt();
-            continue;
-        }
-
-        // Step 4: Scroll + edge draw (beam in border/top HUD - free time)
+        // Step 3: Scroll + edge draw (during safe time before beam hits viewport)
         if (direction != SCROLL_NONE) {
-            dirty_edge_scroll(direction, map_data, tiles, offscreen_buffer_32x16, &head_row,
-                             &camera_x, &camera_y, MAP_WIDTH, MAP_HEIGHT, 4, 2);  // stride_x=4, stride_y=2
+            dirty_edge_scroll(direction, map_data, tiles, offscreen_buffer_32x16, &head_row, &head_col, &fine_x,
+                             &camera_x, &camera_y, MAP_WIDTH, MAP_HEIGHT, 2, 2);
             need_blit = 1;
         }
 
-        // Step 1+2: Sync immediately before blit to minimize tearing
+        // Step 4: Blit (beam is approaching viewport - write top-down, racing it)
+        // Delay until beam approaches viewport Y=48 (~25,088T after HALT)
+        // Edge drawing + input uses variable time, so we burn remaining T-states
+        // to start the blit just as the beam enters the viewport area.
+        // This pushes any tearing to the bottom of the viewport.
         if (need_blit) {
-            fb_ok = floating_bus_wait();
-            copy_viewport_32x16_to_screen_ring(offscreen_buffer_32x16, head_row);
+            __asm
+                ; Busy-wait: ~12,000T (calibrated for post-edge-draw timing)
+                ; Each outer iteration = 13*inner + 8 ≈ 3336T, × 4 ≈ 13,344T
+                ld b, 4
+            _blit_delay_outer:
+                ld c, 255
+            _blit_delay_inner:
+                dec c
+                jr nz, _blit_delay_inner
+                djnz _blit_delay_outer
+            __endasm;
+            copy_viewport_32x16_to_screen_ring_2d(offscreen_buffer_32x16, head_row, head_col, fine_x);
             need_blit = 0;
-        }
-        
-        // HALT as frame sync fallback
-        if (!fb_ok) {
-            intrinsic_halt();
         }
     }
 }
