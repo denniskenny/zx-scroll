@@ -228,7 +228,26 @@ _r2d_second:
 ;   2. For each row: read directly from ring buffer, use table lookups, emit
 ;------------------------------------------------------------------------------
 _ring2d_fine:
-    ; Generate shift lookup tables for this fine_x value
+    ; Runtime page-align the shift tables (once per blit)
+    ; Round _shift_table_raw up to next 256-byte boundary
+    ld hl, _shift_table_raw
+    ld a, l
+    or a
+    jr z, _r2df_already_aligned
+    ld l, 0
+    inc h
+_r2df_already_aligned:
+    ; HL = page-aligned shl_table address
+    ld a, h
+    ld (_r2df_shl_page), a
+    ld (_r2df_shl_addr), hl
+    ; shr_table is 256 bytes later (also page-aligned)
+    inc h
+    ld a, h
+    ld (_r2df_shr_page), a
+    ld (_r2df_shr_addr), hl
+
+    ; Generate shift lookup tables into the aligned addresses
     ld a, (ix+8)              ; A = fine_x (1-7)
     call _generate_shift_tables
 
@@ -373,7 +392,7 @@ _generate_shift_tables:
     ld c, a                   ; C = comp_x = 8 - fine_x
     
     ; Generate shl_table: for i=0 to 255, table[i] = i << fine_x
-    ld hl, _shift_shl_table
+    ld hl, (_r2df_shl_addr)
     ld d, 0                   ; D = byte value (0-255)
 _gen_shl_loop:
     ld a, d                   ; A = byte value
@@ -391,7 +410,7 @@ _gen_shl_done_shift:
     jr nz, _gen_shl_loop      ; loop until D wraps to 0
     
     ; Generate shr_table: for i=0 to 255, table[i] = i >> comp_x
-    ld hl, _shift_shr_table
+    ld hl, (_r2df_shr_addr)
     ld d, 0                   ; D = byte value (0-255)
 _gen_shr_loop:
     ld a, d                   ; A = byte value
@@ -459,27 +478,24 @@ _r2df_lin_done:
 
     ; Now use SP trick on the linear temp buffer (same as no-wrap path)
     ld (_r2df_save_sp2), sp
-    ld sp, _r2df_temp
+    ld hl, _r2df_temp
+    ld sp, hl
 
     REPT 32
     pop bc                    ; 10T - C = prev, B = next (peek)
     dec sp                    ; 6T  - overlap
 
-    ld a, c                   ; 4T
-    ld hl, _shift_shl_table   ; 10T
-    add a, l                  ; 4T
-    ld l, a                   ; 4T
-    jr nc, $ + 3              ; 7T
-    inc h                     ; 4T
-    ld c, (hl)                ; 7T - C = prev << fine_x
+    ; shl lookup: page-aligned, just set H=page, L=index
+    ld a, (_r2df_shl_page)    ; 13T
+    ld h, a                   ; 4T
+    ld l, c                   ; 4T  - index = prev byte
+    ld c, (hl)                ; 7T  - C = prev << fine_x
 
-    ld a, b                   ; 4T
-    ld hl, _shift_shr_table   ; 10T
-    add a, l                  ; 4T
-    ld l, a                   ; 4T
-    jr nc, $ + 3              ; 7T
-    inc h                     ; 4T
-    ld a, (hl)                ; 7T - A = next >> comp_x
+    ; shr lookup: page-aligned
+    ld a, (_r2df_shr_page)    ; 13T
+    ld h, a                   ; 4T
+    ld l, b                   ; 4T  - index = next byte
+    ld a, (hl)                ; 7T  - A = next >> comp_x
 
     or c                      ; 4T
     ld (de), a                ; 7T
@@ -491,8 +507,6 @@ _r2df_lin_done:
 
 _r2df_save_sp2:
     DEFW 0
-_r2df_temp:
-    DEFS 33                   ; 33-byte linearization buffer
 
 ; No-wrap path: head_col == 0, fully unrolled 32 iterations
 ; Saves 13T per byte (djnz) = 416T per row = ~40,000T per blit
@@ -520,23 +534,17 @@ _r2df_emit_nowrap:
     pop bc                    ; 10T - C = prev byte, B = next byte (peek)
     dec sp                    ; 6T  - back up 1 so next pop overlaps
 
-    ; shl lookup on C (prev << fine_x)
-    ld a, c                   ; 4T
-    ld hl, _shift_shl_table   ; 10T
-    add a, l                  ; 4T
-    ld l, a                   ; 4T
-    jr nc, $ + 3              ; 7T (usually no carry)
-    inc h                     ; 4T (rare)
-    ld c, (hl)                ; 7T - C = prev << fine_x
+    ; shl lookup: page-aligned, just set H=page, L=index
+    ld a, (_r2df_shl_page)    ; 13T
+    ld h, a                   ; 4T
+    ld l, c                   ; 4T  - index = prev byte
+    ld c, (hl)                ; 7T  - C = prev << fine_x
 
-    ; shr lookup on B (next >> comp_x)
-    ld a, b                   ; 4T
-    ld hl, _shift_shr_table   ; 10T
-    add a, l                  ; 4T
-    ld l, a                   ; 4T
-    jr nc, $ + 3              ; 7T
-    inc h                     ; 4T
-    ld a, (hl)                ; 7T - A = next >> comp_x
+    ; shr lookup: page-aligned
+    ld a, (_r2df_shr_page)    ; 13T
+    ld h, a                   ; 4T
+    ld l, b                   ; 4T  - index = next byte
+    ld a, (hl)                ; 7T  - A = next >> comp_x
 
     ; Combine and write
     or c                      ; 4T
@@ -551,6 +559,14 @@ _r2df_emit_nowrap:
 _r2df_save_sp:
     DEFW 0
 
+_r2df_shl_page:
+    DEFB 0
+_r2df_shr_page:
+    DEFB 0
+_r2df_shl_addr:
+    DEFW 0
+_r2df_shr_addr:
+    DEFW 0
 _r2df_first:
     DEFB 0
 _r2df_second:
@@ -598,10 +614,13 @@ scr_addr_table_32x16:
 _offscreen_buffer_32x16:
     DEFS 3168                ; 33 bytes * 96 scanlines (32 visible + 1 for horizontal ring-buffer)
 
-; Shift lookup tables for fine_x optimization (512 bytes)
-; shl_table[byte] = byte << fine_x, shr_table[byte] = byte >> (8-fine_x)
-_shift_shl_table:
-    DEFS 256
-_shift_shr_table:
-    DEFS 256
+_r2df_temp:
+    DEFS 33                   ; 33-byte linearization buffer for wrapping path
+
+; Raw storage for shift tables: 512 bytes + 255 padding for runtime page-alignment
+; At init, we round up _shift_table_raw to next 256-byte boundary for shl_table,
+; then shr_table starts 256 bytes later (automatically page-aligned too)
+_shift_table_raw:
+    DEFS 767                  ; 256 + 256 + 255 (worst-case alignment padding)
+
 
