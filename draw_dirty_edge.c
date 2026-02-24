@@ -130,7 +130,7 @@ static void draw_byte_column(unsigned char *buffer, const unsigned char *map_dat
     unsigned char in_tile_y = camera_y & 7;
     
     unsigned char row_index = head_row;
-    unsigned char *row_ptr = buffer + ((unsigned int)row_index * 33) + buf_col;
+    unsigned char *row_ptr = buffer + ((unsigned int)row_index * DIRTY_VIEWPORT_WIDTH_BYTES) + buf_col;
     const unsigned char *map_ptr = &map_data[tile_y * map_width + tile_x];
     
     int current_tile_y = tile_y;
@@ -158,12 +158,12 @@ static void draw_byte_column(unsigned char *buffer, const unsigned char *map_dat
             row_index = 0;
             row_ptr = buffer + buf_col;
         } else {
-            row_ptr += 33;
+            row_ptr += DIRTY_VIEWPORT_WIDTH_BYTES;
         }
     }
 }
 
-// Draw bottom edge: bottom scanline (33 bytes: 32 visible + 1 lookahead)
+// Draw bottom edge: bottom scanline (31 bytes: 30 visible + 1 lookahead)
 // Buffer stores byte-aligned tile data; the blitter handles fine_x sub-pixel shifting.
 static void draw_edge_bottom_c(unsigned char *buffer, const unsigned char *map_data,
                                const unsigned char *tiles, int camera_x, int camera_y, int map_width,
@@ -181,11 +181,11 @@ static void draw_edge_bottom_c(unsigned char *buffer, const unsigned char *map_d
     
     unsigned char bottom_row = head_row + (DIRTY_VIEWPORT_HEIGHT_PX - 1);
     if (bottom_row >= DIRTY_VIEWPORT_HEIGHT_PX) bottom_row -= DIRTY_VIEWPORT_HEIGHT_PX;
-    unsigned char *row_ptr = buffer + ((unsigned int)bottom_row * 33);
+    unsigned char *row_ptr = buffer + ((unsigned int)bottom_row * DIRTY_VIEWPORT_WIDTH_BYTES);
     const unsigned char *map_ptr = &map_data[tile_y * map_width + tile_x];
     
-    // Draw 33 bytes (32 visible + 1 lookahead) with column wrapping via head_col
-    for (unsigned char col = 0; col < 33; col++) {
+    // Draw 31 bytes (30 visible + 1 lookahead) with column wrapping via head_col
+    for (unsigned char col = 0; col < DIRTY_VIEWPORT_WIDTH_BYTES; col++) {
         unsigned char buf_col = head_col + col;
         if (buf_col >= DIRTY_VIEWPORT_WIDTH_BYTES) buf_col -= DIRTY_VIEWPORT_WIDTH_BYTES;
         
@@ -196,7 +196,7 @@ static void draw_edge_bottom_c(unsigned char *buffer, const unsigned char *map_d
     }
 }
 
-// Draw top edge: top scanline (33 bytes: 32 visible + 1 lookahead)
+// Draw top edge: top scanline (31 bytes: 30 visible + 1 lookahead)
 // Buffer stores byte-aligned tile data; the blitter handles fine_x sub-pixel shifting.
 static void draw_edge_top_c(unsigned char *buffer, const unsigned char *map_data,
                             const unsigned char *tiles, int camera_x, int camera_y, int map_width,
@@ -210,10 +210,10 @@ static void draw_edge_top_c(unsigned char *buffer, const unsigned char *map_data
     int tile_x = base_x >> 3;
     if (tile_x < 0) tile_x = 0;
     
-    unsigned char *row_ptr = buffer + ((unsigned int)head_row * 33);
+    unsigned char *row_ptr = buffer + ((unsigned int)head_row * DIRTY_VIEWPORT_WIDTH_BYTES);
     
-    // Draw 33 bytes (32 visible + 1 lookahead) with column wrapping via head_col
-    for (unsigned char col = 0; col < 33; col++) {
+    // Draw 31 bytes (30 visible + 1 lookahead) with column wrapping via head_col
+    for (unsigned char col = 0; col < DIRTY_VIEWPORT_WIDTH_BYTES; col++) {
         unsigned char buf_col = head_col + col;
         if (buf_col >= DIRTY_VIEWPORT_WIDTH_BYTES) buf_col -= DIRTY_VIEWPORT_WIDTH_BYTES;
         
@@ -242,15 +242,15 @@ static void scroll_x_plus_ring(unsigned char *buffer, unsigned char head_row, un
         // Byte-aligned pixel X for the leftmost visible byte
         int base_x = camera_x & ~7;
 
-        // Draw the new rightmost visible byte (column 31 from head_col)
-        unsigned char col31 = h + 31;
-        if (col31 >= DIRTY_VIEWPORT_WIDTH_BYTES) col31 -= DIRTY_VIEWPORT_WIDTH_BYTES;
-        draw_byte_column(buffer, map_data, tiles, base_x + 31*8, camera_y, map_width, head_row, col31);
+        // Draw the new rightmost visible byte (column 29 from head_col)
+        unsigned char col29 = h + (DIRTY_VIEWPORT_WIDTH - 1);
+        if (col29 >= DIRTY_VIEWPORT_WIDTH_BYTES) col29 -= DIRTY_VIEWPORT_WIDTH_BYTES;
+        draw_byte_column(buffer, map_data, tiles, base_x + (DIRTY_VIEWPORT_WIDTH - 1)*8, camera_y, map_width, head_row, col29);
 
-        // Draw the lookahead byte (column 32 from head_col) for fine_x blending
-        unsigned char col32 = h + 32;
-        if (col32 >= DIRTY_VIEWPORT_WIDTH_BYTES) col32 -= DIRTY_VIEWPORT_WIDTH_BYTES;
-        draw_byte_column(buffer, map_data, tiles, base_x + 32*8, camera_y, map_width, head_row, col32);
+        // Draw the lookahead byte (column 30 from head_col) for fine_x blending
+        unsigned char col30 = h + DIRTY_VIEWPORT_WIDTH;
+        if (col30 >= DIRTY_VIEWPORT_WIDTH_BYTES) col30 -= DIRTY_VIEWPORT_WIDTH_BYTES;
+        draw_byte_column(buffer, map_data, tiles, base_x + DIRTY_VIEWPORT_WIDTH*8, camera_y, map_width, head_row, col30);
     }
     *fine_x = fx;
 }

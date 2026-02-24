@@ -1,16 +1,27 @@
-; copy_viewport_32x16.asm - Blit 32x12 character (256x96 pixel) viewport to screen
-; Viewport is centered: starts at screen row 6 (Y=48)
-; Buffer layout: 33 bytes per scanline, 96 scanlines = 3168 bytes
+; copy_viewport_32x16.asm - Blit viewport to screen
 ; Uses 2D ring-buffer: head_row (vertical) + head_col/fine_x (horizontal)
+;
+; IMPORTANT: These constants must match draw_dirty_edge.h
+; Change VIEWPORT_COLS and VIEWPORT_CHAR_ROWS to resize the viewport.
 
     SECTION code_user
 
     PUBLIC _copy_viewport_32x16_to_screen_ring_2d
+    PUBLIC scr_addr_table_32x16
     EXTERN _offscreen_buffer_32x16
+
+; Master viewport parameters (must match draw_dirty_edge.h)
+VIEWPORT_COLS       EQU 20       ; visible columns
+VIEWPORT_CHAR_ROWS  EQU 16       ; visible character rows
+VIEWPORT_COL_OFFSET EQU 6        ; screen byte offset from left edge
+
+; Derived constants
+BUF_WIDTH       EQU VIEWPORT_COLS + 1    ; buffer bytes per row (visible + 1 lookahead)
+VIEWPORT_HEIGHT EQU VIEWPORT_CHAR_ROWS * 8  ; height in pixels / scanlines
+BUF_SIZE        EQU BUF_WIDTH * VIEWPORT_HEIGHT  ; total buffer size
 
 ; Screen constants
 SCREEN_BASE     EQU 0x4000
-VIEWPORT_START_Y EQU 48          ; Centered: (192-96)/2 = 48
 
 ;------------------------------------------------------------------------------
 ; copy_viewport_32x16_to_screen_ring_2d - 2D ring-buffer blitter
@@ -20,7 +31,7 @@ VIEWPORT_START_Y EQU 48          ; Centered: (192-96)/2 = 48
 ;     unsigned char head_col,   ; ix+7
 ;     unsigned char fine_x      ; ix+8
 ; )
-; Reads 33 bytes per row from head_col with column wrapping.
+; Reads BUF_WIDTH bytes per row from head_col with column wrapping.
 ; When fine_x==0: direct copy (fast path)
 ; When fine_x>0:  output[i] = (src[i] << fine_x) | (src[i+1] >> (8-fine_x))
 ;------------------------------------------------------------------------------
@@ -41,48 +52,50 @@ _copy_viewport_32x16_to_screen_ring_2d:
     ld h, (ix+5)             ; HL = base buffer
     ld c, (ix+7)             ; C = head_col
 
-    ; Compute first_bytes = min(33 - head_col, 32)
-    ld a, 33
+    ; Compute first_bytes = min(BUF_WIDTH - head_col, VIEWPORT_COLS)
+    ld a, BUF_WIDTH
     sub c
-    cp 32
+    cp VIEWPORT_COLS
     jr c, _r2d_fb_ok
-    ld a, 32
+    ld a, VIEWPORT_COLS
 _r2d_fb_ok:
     ld (_r2d_first), a
     ld b, a
-    ld a, 32
+    ld a, VIEWPORT_COLS
     sub b
     ld (_r2d_second), a
 
-    ; Compute buffer + head_row * 33 + head_col
+    ; Compute buffer + head_row * BUF_WIDTH + head_col
     push hl                   ; save base buffer for segment B
     push hl
+    ; head_row * BUF_WIDTH = head_row * 32 - head_row (when BUF_WIDTH=31)
+    ; Generic: multiply head_row by BUF_WIDTH using repeated addition
     ld a, (ix+6)
-    ld l, a
-    ld h, 0
-    add hl, hl
-    add hl, hl
-    add hl, hl
-    add hl, hl
-    add hl, hl
-    ld d, 0
-    ld e, a
+    ld c, a                   ; save head_row in C
+    ld de, BUF_WIDTH
+    ld hl, 0
+_r2d_mul:
+    or a
+    jr z, _r2d_mul_done
     add hl, de
+    dec a
+    jr _r2d_mul
+_r2d_mul_done:
     ld d, 0
     ld e, (ix+7)
     add hl, de
     ex de, hl
     pop hl
-    add hl, de                ; HL = buffer + head_row*33 + head_col
+    add hl, de                ; HL = buffer + head_row*BUF_WIDTH + head_col
 
     exx
     ld hl, scr_addr_table_32x16
     exx
 
     ; Segment A
-    ld a, (ix+6)
+    ld a, c                   ; restore head_row
     ld c, a
-    ld a, 96
+    ld a, VIEWPORT_HEIGHT
     sub c
     ld b, a
     jr z, _r2d_segb
@@ -97,6 +110,11 @@ _r2d_la:
     push de
     exx
     pop de
+IF VIEWPORT_COL_OFFSET > 0
+    REPT VIEWPORT_COL_OFFSET
+    inc de
+    ENDR
+ENDIF
 
     ld a, (_r2d_first)
     ld b, a
@@ -112,7 +130,7 @@ _r2d_c1a:
     jr z, _r2d_nwa
 
     push de
-    ld de, -33
+    ld de, -BUF_WIDTH
     add hl, de
     pop de
     ld b, a
@@ -163,6 +181,11 @@ _r2d_lb:
     push de
     exx
     pop de
+IF VIEWPORT_COL_OFFSET > 0
+    REPT VIEWPORT_COL_OFFSET
+    inc de
+    ENDR
+ENDIF
 
     ld a, (_r2d_first)
     ld b, a
@@ -178,7 +201,7 @@ _r2d_c1b:
     jr z, _r2d_nwb
 
     push de
-    ld de, -33
+    ld de, -BUF_WIDTH
     add hl, de
     pop de
     ld b, a
@@ -256,43 +279,43 @@ _r2df_already_aligned:
     ld h, (ix+5)             ; HL = base buffer
     ld c, (ix+7)             ; C = head_col
 
-    ; first = 33 - head_col (bytes before wrap), second = head_col (after wrap)
-    ld a, 33
+    ; first = BUF_WIDTH - head_col (bytes before wrap), second = head_col (after wrap)
+    ld a, BUF_WIDTH
     sub c
     ld (_r2df_first), a
     ld a, c
     ld (_r2df_second), a
 
-    ; Compute buffer + head_row * 33 + head_col
+    ; Compute buffer + head_row * BUF_WIDTH + head_col
     push hl                   ; save base buffer for segment B
     push hl
     ld a, (ix+6)
-    ld l, a
-    ld h, 0
-    add hl, hl
-    add hl, hl
-    add hl, hl
-    add hl, hl
-    add hl, hl               ; HL = head_row * 32
-    ld d, 0
-    ld e, a
-    add hl, de                ; HL = head_row * 33
+    ld c, a                   ; save head_row in C
+    ld de, BUF_WIDTH
+    ld hl, 0
+_r2df_mul:
+    or a
+    jr z, _r2df_mul_done
+    add hl, de
+    dec a
+    jr _r2df_mul
+_r2df_mul_done:
     ld d, 0
     ld e, (ix+7)
-    add hl, de                ; HL = head_row * 33 + head_col
+    add hl, de                ; HL = head_row * BUF_WIDTH + head_col
     ex de, hl
     pop hl
-    add hl, de                ; HL = buffer + head_row*33 + head_col
+    add hl, de                ; HL = buffer + head_row*BUF_WIDTH + head_col
 
     ; Screen address table in alt HL'
     exx
     ld hl, scr_addr_table_32x16
     exx
 
-    ; Segment A: rows from head_row to 95
-    ld a, (ix+6)
+    ; Segment A: rows from head_row to VIEWPORT_HEIGHT-1
+    ld a, c                   ; restore head_row
     ld c, a
-    ld a, 96
+    ld a, VIEWPORT_HEIGHT
     sub c
     ld b, a
     jp z, _r2df_segb
@@ -310,8 +333,13 @@ _r2df_la:
     push de
     exx
     pop de                    ; DE = screen address
+IF VIEWPORT_COL_OFFSET > 0
+    REPT VIEWPORT_COL_OFFSET
+    inc de
+    ENDR
+ENDIF
 
-    ; Emit 32 output bytes reading directly from ring buffer
+    ; Emit VIEWPORT_COLS output bytes reading directly from ring buffer
     ; HL = buffer row at head_col position
     ; Pass first/second in BC for wrapping
     ld a, (_r2df_first)
@@ -320,10 +348,10 @@ _r2df_la:
     ld c, a                   ; C = bytes after wrap
     call _r2df_emit_row
 
-    ; Advance source to next row (add 33 to saved row start)
+    ; Advance source to next row (add BUF_WIDTH to saved row start)
     pop hl
     push de
-    ld de, 33
+    ld de, BUF_WIDTH
     add hl, de
     pop de
 
@@ -353,6 +381,11 @@ _r2df_lb:
     push de
     exx
     pop de
+IF VIEWPORT_COL_OFFSET > 0
+    REPT VIEWPORT_COL_OFFSET
+    inc de
+    ENDR
+ENDIF
 
     ; Pass first/second in BC for wrapping
     ld a, (_r2df_first)
@@ -363,7 +396,7 @@ _r2df_lb:
 
     pop hl
     push de
-    ld de, 33
+    ld de, BUF_WIDTH
     add hl, de
     pop de
 
@@ -433,22 +466,21 @@ _gen_shr_done_shift:
     ret
 
 ;----------------------------------------------------------------------
-; _r2df_emit_row: emit 32 shift-combined bytes reading directly from ring buffer
+; _r2df_emit_row: emit VIEWPORT_COLS shift-combined bytes from ring buffer
 ; Input: HL = source row at head_col, DE = screen address
 ;        B = bytes before wrap (first), C = bytes after wrap (second)
-; Output: 32 bytes to screen with shift-combine
+; Output: VIEWPORT_COLS bytes to screen with shift-combine
 ; Destroys: A, B, C, HL, DE
 ;
-; Strategy: linearize 33 source bytes into temp buffer, then use SP trick.
-; Linearize cost: ~430T. SP trick saves ~2,400T vs old loop. Net: ~2,000T/row.
+; Strategy: linearize BUF_WIDTH source bytes into temp buffer, then use SP trick.
 ;----------------------------------------------------------------------
 _r2df_emit_row:
-    ; Check if wrapping needed (B == 33 means head_col == 0, no wrap)
+    ; Check if wrapping needed (B == BUF_WIDTH means head_col == 0, no wrap)
     ld a, b
-    cp 33
+    cp BUF_WIDTH
     jp z, _r2df_emit_nowrap
 
-    ; Wrapping path: linearize 33 source bytes into _r2df_temp using LDIR
+    ; Wrapping path: linearize BUF_WIDTH source bytes into _r2df_temp using LDIR
     ; First B bytes from HL (head_col to end), then C bytes from column 0
     ; LDIR = 16T/byte vs djnz loop = 39T/byte. Saves ~760T/row.
     push de                   ; save screen address
@@ -461,7 +493,7 @@ _r2df_emit_row:
 
     ; Wrap: HL is now past end of row, go back to column 0
     push de                   ; save temp dest position
-    ld de, -33
+    ld de, -BUF_WIDTH
     add hl, de
     pop de                    ; restore temp dest
 
@@ -481,7 +513,7 @@ _r2df_lin_done:
     ld hl, _r2df_temp
     ld sp, hl
 
-    REPT 32
+    REPT VIEWPORT_COLS
     pop bc                    ; 10T - C = prev, B = next (peek)
     dec sp                    ; 6T  - overlap
 
@@ -508,7 +540,7 @@ _r2df_lin_done:
 _r2df_save_sp2:
     DEFW 0
 
-; No-wrap path: head_col == 0, fully unrolled 32 iterations
+; No-wrap path: head_col == 0, fully unrolled VIEWPORT_COLS iterations
 ; Saves 13T per byte (djnz) = 416T per row = ~40,000T per blit
 ; Uses SP trick: save SP, set SP = source, use pop to read pairs
 ; Then HL is free for table lookups without push/pop
@@ -530,7 +562,7 @@ _r2df_emit_nowrap:
     ; DE = screen address (already set)
     ; Now HL is free for table lookups
 
-    REPT 32
+    REPT VIEWPORT_COLS
     pop bc                    ; 10T - C = prev byte, B = next byte (peek)
     dec sp                    ; 6T  - back up 1 so next pop overlaps
 
@@ -573,12 +605,16 @@ _r2df_second:
     DEFB 0
 
 ;------------------------------------------------------------------------------
-; Screen address lookup table for 96 lines starting at Y=48
+; Screen address lookup table for VIEWPORT_HEIGHT lines starting at Y=32
 ; ZX Spectrum screen layout:
 ;   Address = 0x4000 + (Y/64)*0x800 + ((Y%64)/8)*0x20 + (Y%8)*0x100
-; For our viewport starting at Y=48, we precompute all 96 addresses
+; MUST be regenerated if VIEWPORT_START_CHAR_ROW or VIEWPORT_CHAR_ROWS changes
 ;------------------------------------------------------------------------------
 scr_addr_table_32x16:
+    ; Y=32-39 (third 0, char row 4)
+    DEFW 0x4080, 0x4180, 0x4280, 0x4380, 0x4480, 0x4580, 0x4680, 0x4780
+    ; Y=40-47 (third 0, char row 5)
+    DEFW 0x40A0, 0x41A0, 0x42A0, 0x43A0, 0x44A0, 0x45A0, 0x46A0, 0x47A0
     ; Y=48-55 (third 0, char row 6)
     DEFW 0x40C0, 0x41C0, 0x42C0, 0x43C0, 0x44C0, 0x45C0, 0x46C0, 0x47C0
     ; Y=56-63 (third 0, char row 7)
@@ -603,19 +639,22 @@ scr_addr_table_32x16:
     DEFW 0x5000, 0x5100, 0x5200, 0x5300, 0x5400, 0x5500, 0x5600, 0x5700
     ; Y=136-143 (third 2, char row 1)
     DEFW 0x5020, 0x5120, 0x5220, 0x5320, 0x5420, 0x5520, 0x5620, 0x5720
+    ; Y=144-151 (third 2, char row 2)
+    DEFW 0x5040, 0x5140, 0x5240, 0x5340, 0x5440, 0x5540, 0x5640, 0x5740
+    ; Y=152-159 (third 2, char row 3)
+    DEFW 0x5060, 0x5160, 0x5260, 0x5360, 0x5460, 0x5560, 0x5660, 0x5760
 
 ;------------------------------------------------------------------------------
-; Offscreen buffer for 32x12 viewport (3168 bytes = 33 * 96)
-; 33 bytes per row: 32 visible + 1 lookahead for fine_x blending
+; Offscreen buffer for viewport (BUF_WIDTH * VIEWPORT_HEIGHT bytes)
 ;------------------------------------------------------------------------------
     SECTION bss_user
     
     PUBLIC _offscreen_buffer_32x16
 _offscreen_buffer_32x16:
-    DEFS 3168                ; 33 bytes * 96 scanlines (32 visible + 1 for horizontal ring-buffer)
+    DEFS BUF_SIZE            ; BUF_WIDTH * VIEWPORT_HEIGHT
 
 _r2df_temp:
-    DEFS 33                   ; 33-byte linearization buffer for wrapping path
+    DEFS BUF_WIDTH           ; linearization buffer for wrapping path
 
 ; Raw storage for shift tables: 512 bytes + 255 padding for runtime page-alignment
 ; At init, we round up _shift_table_raw to next 256-byte boundary for shl_table,
