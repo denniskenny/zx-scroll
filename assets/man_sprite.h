@@ -1,0 +1,27 @@
+#ifndef MAN_SPRITE_H
+#define MAN_SPRITE_H
+
+// 16x16 man sprite in SP1-style mask+graphic interleaved format
+// 4 bytes per scanline: [mask_left, gfx_left, mask_right, gfx_right]
+// mask bit=1: preserve background, mask bit=0: replace with graphic
+// Mask is expanded 1 pixel around the figure in all directions
+static const unsigned char man_sprite[64] = {
+    0xF0,0x03, 0x0F,0xC0,  // ......XXXX......  head top
+    0xF0,0x07, 0x0F,0xE0,  // .....XXXXXX.....  head
+    0xF0,0x06, 0x0F,0x60,  // .....XX..XX.....  eyes
+    0xF0,0x07, 0x0F,0xE0,  // .....XXXXXX.....  head
+    0xC0,0x03, 0x03,0xC0,  // ......XXXX......  chin
+    0x80,0x1F, 0x01,0xF8,  // ...XXXXXXXXXX...  shoulders
+    0x80,0x3F, 0x01,0xFC,  // ..XXXXXXXXXXXX..  torso
+    0x80,0x33, 0x01,0xCC,  // ..XX..XXXX..XX..  arms/torso
+    0x80,0x03, 0x01,0xC0,  // ......XXXX......  waist
+    0xF0,0x03, 0x0F,0xC0,  // ......XXXX......  waist
+    0xF0,0x07, 0x0F,0xE0,  // .....XXXXXX.....  hips
+    0xE0,0x06, 0x07,0x60,  // .....XX..XX.....  leg split
+    0xE0,0x0C, 0x07,0x30,  // ....XX....XX....  legs
+    0xC1,0x0C, 0x83,0x30,  // ....XX....XX....  legs
+    0x81,0x18, 0x81,0x18,  // ...XX......XX...  lower legs
+    0x81,0x3C, 0x81,0x3C   // ..XXXX....XXXX..  feet
+};
+
+#endif // MAN_SPRITE_H

@@ -38,4 +38,7 @@ void shift_viewport_right(void);  // for scroll left:  cols 0..18 → 1..19
 void shift_viewport_up(void);     // for scroll down:  rows 1..15 → 0..14
 void shift_viewport_down(void);   // for scroll up:    rows 0..14 → 1..15
 
+// Draw the man sprite at the centre of the viewport
+void draw_man(void);
+
 #endif // TILE_RENDER_H
