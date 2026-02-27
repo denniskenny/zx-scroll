@@ -50,13 +50,15 @@ static unsigned char read_input(void) {
     return dir;
 }
 
-// Check if the 2x2 tile area under the man is all empty (tile 0)
+// Check if the 2x2 tile area under the man contains any solid (tile 1) tiles
 static unsigned char man_can_move(int cam_x, int cam_y) {
     unsigned int off = (unsigned int)(cam_y + MAN_VIEWPORT_ROW) * MAP_WIDTH
                      + cam_x + MAN_VIEWPORT_COL;
+    
+    unsigned int solid = 1;                 
 
-    if (map_data[off] | map_data[off + 1]
-      | map_data[off + MAP_WIDTH] | map_data[off + MAP_WIDTH + 1])
+    if (map_data[off] == solid || map_data[off + 1] == solid
+      || map_data[off + MAP_WIDTH] == solid || map_data[off + MAP_WIDTH + 1] == solid)
         return 0;
     return 1;
 }
