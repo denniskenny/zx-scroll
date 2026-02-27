@@ -21,7 +21,7 @@
 // Master viewport parameters - change these to resize the viewport
 #define VIEWPORT_COLS           20   // visible columns (must be <= 32)
 #define VIEWPORT_CHAR_ROWS      16   // visible character rows (height in 8-pixel rows)
-#define VIEWPORT_START_CHAR_ROW 4    // screen char row where viewport starts
+#define VIEWPORT_START_CHAR_ROW 8    // screen char row where viewport starts
 #define VIEWPORT_COL_OFFSET     6    // screen byte offset from left edge
 
 // Derived viewport dimensions (do not change these directly)
@@ -56,5 +56,6 @@ unsigned char dirty_edge_scroll(
 void dixel_shift_right(void);
 void dixel_shift_left(void);
 void dixel_wait_vblank(void);
+void dixel_init_sync(void);
 
 #endif // DRAW_DIRTY_EDGE_H
