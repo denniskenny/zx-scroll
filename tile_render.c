@@ -50,15 +50,44 @@ static unsigned char read_input(void) {
     return dir;
 }
 
-// Check if the 2x2 tile area under the man contains any solid (tile 1) tiles
-static unsigned char man_can_move(int cam_x, int cam_y) {
-    unsigned int off = (unsigned int)(cam_y + MAN_VIEWPORT_ROW) * MAP_WIDTH
-                     + cam_x + MAN_VIEWPORT_COL;
-    
-    unsigned int solid = 1;                 
+static void flash_border_red(void) {
+    __asm
+        ld a, 2
+        out (0xFE), a
+    __endasm;
+}
 
-    if (map_data[off] == solid || map_data[off + 1] == solid
-      || map_data[off + MAP_WIDTH] == solid || map_data[off + MAP_WIDTH + 1] == solid)
+static void reset_border(void) {
+    __asm
+        xor a
+        out (0xFE), a
+    __endasm;
+}
+
+// Handle a single tile under the man. Returns 1 if solid (blocks movement).
+static unsigned char handle_tile(unsigned char tile) {
+    switch (tile) {
+        case 1: return 1;  // solid wall
+        case 3: flash_border_red(); return 0;
+        default: return 0;
+    }
+}
+
+// Check the 2x2 tile area under the man for collisions and triggers.
+// Off-map tiles are treated as passable (empty).
+static unsigned char man_can_move(int cam_x, int cam_y) {
+    int mx = cam_x + MAN_VIEWPORT_COL;
+    int my = cam_y + MAN_VIEWPORT_ROW;
+    unsigned int off;
+
+    if (mx < 0 || mx + 1 >= MAP_WIDTH || my < 0 || my + 1 >= MAP_HEIGHT)
+        return 1;
+
+    reset_border();
+    off = (unsigned int)my * MAP_WIDTH + mx;
+
+    if (handle_tile(map_data[off]) || handle_tile(map_data[off + 1])
+      || handle_tile(map_data[off + MAP_WIDTH]) || handle_tile(map_data[off + MAP_WIDTH + 1]))
         return 0;
     return 1;
 }
@@ -66,23 +95,21 @@ static unsigned char man_can_move(int cam_x, int cam_y) {
 // Update camera based on input direction
 // Returns nonzero if camera moved
 static unsigned char update_camera(unsigned char input) {
-    int max_x = MAP_WIDTH - VIEWPORT_COLS;
-    int max_y = MAP_HEIGHT - VIEWPORT_CHAR_ROWS;
     int new_x = camera_tile_x;
     int new_y = camera_tile_y;
 
     prev_tile_x = camera_tile_x;
     prev_tile_y = camera_tile_y;
 
-    // Horizontal axis
-    if ((input & 0x01) && new_x < max_x) new_x++;  // right
-    if ((input & 0x02) && new_x > 0)     new_x--;   // left
-    if (!man_can_move(new_x, new_y))      new_x = camera_tile_x;
+    // Horizontal axis (no edge-of-map limits)
+    if (input & 0x01) new_x++;  // right
+    if (input & 0x02) new_x--;  // left
+    if (!man_can_move(new_x, new_y)) new_x = camera_tile_x;
 
-    // Vertical axis (uses accepted horizontal position for wall-sliding)
-    if ((input & 0x04) && new_y < max_y) new_y++;  // down
-    if ((input & 0x08) && new_y > 0)     new_y--;   // up
-    if (!man_can_move(new_x, new_y))      new_y = camera_tile_y;
+    // Vertical axis (no edge-of-map limits)
+    if (input & 0x04) new_y++;  // down
+    if (input & 0x08) new_y--;  // up
+    if (!man_can_move(new_x, new_y)) new_y = camera_tile_y;
 
     camera_tile_x = new_x;
     camera_tile_y = new_y;
@@ -90,51 +117,68 @@ static unsigned char update_camera(unsigned char input) {
     return (camera_tile_x != prev_tile_x) || (camera_tile_y != prev_tile_y);
 }
 
-// Scroll handlers: LDIR shift + dirty edge draw.
-// Horizontal: ~49kT shift + ~6.4kT column = ~55kT (< 1 frame, tear-free)
-// Vertical:   ~68kT shift + ~10.6kT row   = ~79kT (~1.1 frames)
-// Diagonal:   full viewport redraw         = ~170kT (~2.4 frames)
-
-static void scroll_right(void) {
-    shift_viewport_left();
-    render_dirty_column(
-        VIEWPORT_COL_OFFSET + VIEWPORT_COLS - 1,
-        &map_data[camera_tile_y * MAP_WIDTH + camera_tile_x + VIEWPORT_COLS - 1]);
+// Safe tile read: returns 0 for out-of-bounds
+static unsigned char safe_tile(int x, int y) {
+    if ((unsigned int)x >= MAP_WIDTH || (unsigned int)y >= MAP_HEIGHT)
+        return 0;
+    return map_data[y * MAP_WIDTH + x];
 }
 
-static void scroll_left(void) {
-    shift_viewport_right();
-    render_dirty_column(
-        VIEWPORT_COL_OFFSET,
-        &map_data[camera_tile_y * MAP_WIDTH + camera_tile_x]);
+// Render a single tile to screen (0 = empty pixels)
+static void render_tile_at(unsigned char tile, unsigned char vp_row, unsigned char screen_col) {
+    unsigned char s;
+    unsigned int base = (unsigned int)vp_row * 8;
+    for (s = 0; s < 8; s++) {
+        unsigned char *p = (unsigned char *)(scr_addr_table_direct[base + s] + screen_col);
+        *p = tile ? tiles[tile * 8 + s] : 0;
+    }
 }
 
-static void scroll_down(void) {
-    shift_viewport_up();
-    render_dirty_row(
-        VIEWPORT_CHAR_ROWS - 1,
-        &map_data[(camera_tile_y + VIEWPORT_CHAR_ROWS - 1) * MAP_WIDTH + camera_tile_x]);
+// Render a column tile-by-tile with bounds checking (C fallback)
+static void safe_render_column(unsigned char screen_col, int map_x) {
+    unsigned char row;
+    __asm di __endasm;
+    for (row = 0; row < VIEWPORT_CHAR_ROWS; row++)
+        render_tile_at(safe_tile(map_x, camera_tile_y + row), row, screen_col);
+    __asm ei __endasm;
 }
 
-static void scroll_up(void) {
-    shift_viewport_down();
-    render_dirty_row(
-        0,
-        &map_data[camera_tile_y * MAP_WIDTH + camera_tile_x]);
+// Render a row tile-by-tile with bounds checking (C fallback)
+static void safe_render_row(unsigned char viewport_row, int map_y) {
+    unsigned char col;
+    __asm di __endasm;
+    for (col = 0; col < VIEWPORT_COLS; col++)
+        render_tile_at(safe_tile(camera_tile_x + col, map_y), viewport_row, VIEWPORT_COL_OFFSET + col);
+    __asm ei __endasm;
 }
 
-static void redraw_viewport(void) {
-    render_full_viewport(&map_data[camera_tile_y * MAP_WIDTH + camera_tile_x]);
+// Render a dirty column: assembly when fully in bounds, C per-tile otherwise
+static void draw_column(unsigned char screen_col, int map_x) {
+    if (map_x >= 0 && map_x < MAP_WIDTH
+        && camera_tile_y >= 0 && camera_tile_y + VIEWPORT_CHAR_ROWS <= MAP_HEIGHT)
+        render_dirty_column(screen_col, &map_data[camera_tile_y * MAP_WIDTH + map_x]);
+    else
+        safe_render_column(screen_col, map_x);
 }
 
-// Clear attributes in the viewport area (black paper, white ink)
+// Render a dirty row: assembly when fully in bounds, C per-tile otherwise
+static void draw_row(unsigned char viewport_row, int map_y) {
+    if (map_y >= 0 && map_y < MAP_HEIGHT
+        && camera_tile_x >= 0 && camera_tile_x + VIEWPORT_COLS <= MAP_WIDTH)
+        render_dirty_row(viewport_row, &map_data[map_y * MAP_WIDTH + camera_tile_x]);
+    else
+        safe_render_row(viewport_row, map_y);
+}
+
+
+// Clear attributes in the viewport area (white paper, black ink)
 void clear_viewport_attrs(void) {
     unsigned char row;
     for (row = 0; row < VIEWPORT_CHAR_ROWS; row++) {
         unsigned char *attr = (unsigned char *)(0x5800
             + (VIEWPORT_START_CHAR_ROW + row) * 32
             + VIEWPORT_COL_OFFSET);
-        memset(attr, PAPER_BLACK | INK_WHITE, VIEWPORT_COLS);
+        memset(attr, PAPER_BLUE | BRIGHT | INK_BLACK, VIEWPORT_COLS);
     }
 }
 
@@ -152,27 +196,37 @@ void load_scr_to_screen(const unsigned char *scr) {
 static unsigned char man_bg[32];
 static unsigned char man_bg_attr[4];
 
-// Restore background pixels and attributes saved by draw_man()
-static void erase_man(void) {
-    unsigned char i;
-    unsigned char *p;
+// Redraw tiles under the sprite + shifted ghost from the map.
+// Race-the-beam: called AFTER shifts (~50-70KT), so the ULA beam
+// has already passed the sprite at Y=120 (~45KT from interrupt).
+// The redraw area extends 1 tile in the shift direction to cover
+// the ghost left behind by the shifted composited sprite pixels.
+static void redraw_sprite_tiles(int dx, int dy) {
+    unsigned char r, c;
+    unsigned char col0 = MAN_VIEWPORT_COL;
+    unsigned char row0 = MAN_VIEWPORT_ROW;
+    unsigned char col1 = MAN_VIEWPORT_COL + 2;
+    unsigned char row1 = MAN_VIEWPORT_ROW + 2;
+    unsigned char *attr;
 
-    for (i = 0; i < 16; i++) {
-        p = (unsigned char *)(scr_addr_table_direct[MAN_TABLE_OFFSET + i] + MAN_SCREEN_COL);
-        p[0] = man_bg[i * 2];
-        p[1] = man_bg[i * 2 + 1];
-    }
+    // Extend 1 tile in shift direction to cover ghost
+    if (dx > 0) col0--;
+    else if (dx < 0) col1++;
+    if (dy > 0) row0--;
+    else if (dy < 0) row1++;
 
-    // Restore saved attributes
-    {
-        unsigned char *attr;
-        attr = (unsigned char *)(0x5800 + (VIEWPORT_START_CHAR_ROW + MAN_VIEWPORT_ROW) * 32 + MAN_SCREEN_COL);
-        attr[0] = man_bg_attr[0];
-        attr[1] = man_bg_attr[1];
-        attr = (unsigned char *)(0x5800 + (VIEWPORT_START_CHAR_ROW + MAN_VIEWPORT_ROW + 1) * 32 + MAN_SCREEN_COL);
-        attr[0] = man_bg_attr[2];
-        attr[1] = man_bg_attr[3];
-    }
+    for (r = row0; r < row1; r++)
+        for (c = col0; c < col1; c++)
+            render_tile_at(safe_tile(camera_tile_x + c, camera_tile_y + r),
+                           r, VIEWPORT_COL_OFFSET + c);
+
+    // Restore sprite attributes to viewport default
+    attr = (unsigned char *)(0x5800 + (VIEWPORT_START_CHAR_ROW + MAN_VIEWPORT_ROW) * 32 + MAN_SCREEN_COL);
+    attr[0] = PAPER_BLUE | BRIGHT | INK_BLACK;
+    attr[1] = PAPER_BLUE | BRIGHT | INK_BLACK;
+    attr = (unsigned char *)(0x5800 + (VIEWPORT_START_CHAR_ROW + MAN_VIEWPORT_ROW + 1) * 32 + MAN_SCREEN_COL);
+    attr[0] = PAPER_BLUE | BRIGHT | INK_BLACK;
+    attr[1] = PAPER_BLUE | BRIGHT | INK_BLACK;
 }
 
 // Draw man sprite with mask compositing: (background & mask) | graphic
@@ -200,8 +254,8 @@ void draw_man(void) {
         attr = (unsigned char *)(0x5800 + (VIEWPORT_START_CHAR_ROW + MAN_VIEWPORT_ROW) * 32 + MAN_SCREEN_COL);
         man_bg_attr[0] = attr[0];
         man_bg_attr[1] = attr[1];
-        attr[0] = (attr[0] & 0xF8) | INK_GREEN;
-        attr[1] = (attr[1] & 0xF8) | INK_GREEN;
+        attr[0] = (attr[0] & 0xF8) | INK_YELLOW;
+        attr[1] = (attr[1] & 0xF8) | INK_YELLOW;
         attr = (unsigned char *)(0x5800 + (VIEWPORT_START_CHAR_ROW + MAN_VIEWPORT_ROW + 1) * 32 + MAN_SCREEN_COL);
         man_bg_attr[2] = attr[0];
         man_bg_attr[3] = attr[1];
@@ -217,7 +271,7 @@ void tile_render_main(void) {
     load_scr_to_screen(hud_scr);
     clear_viewport_attrs();
 
-    // Initial full viewport render (runs ~2.4 frames with DI)
+    // Initial full viewport render
     map_start = &map_data[camera_tile_y * MAP_WIDTH + camera_tile_x];
     render_full_viewport(map_start);
     draw_man();
@@ -242,21 +296,22 @@ void tile_render_main(void) {
             int dx = camera_tile_x - prev_tile_x;
             int dy = camera_tile_y - prev_tile_y;
 
-            erase_man();
+            // Phase 1: shifts first (each has internal DI/EI)
+            // Takes ~50-70KT; ULA passes sprite Y=120 at ~45KT
+            if (dx > 0) shift_viewport_left();
+            else if (dx < 0) shift_viewport_right();
+            if (dy > 0) shift_viewport_up();
+            else if (dy < 0) shift_viewport_down();
 
-            if (dx && dy) {
-                // Diagonal: full redraw (~170kT, ~2.4 frames)
-                redraw_viewport();
-            } else if (dx > 0) {
-                scroll_right();
-            } else if (dx < 0) {
-                scroll_left();
-            } else if (dy > 0) {
-                scroll_down();
-            } else {
-                scroll_up();
-            }
+            // Phase 2: redraw tiles under sprite + ghost + composite (beam past sprite)
+            redraw_sprite_tiles(dx, dy);
             draw_man();
+
+            // Phase 3: fill stale edges
+            if (dy > 0) draw_row(VIEWPORT_CHAR_ROWS - 1, camera_tile_y + VIEWPORT_CHAR_ROWS - 1);
+            else if (dy < 0) draw_row(0, camera_tile_y);
+            if (dx > 0) draw_column(VIEWPORT_COL_OFFSET + VIEWPORT_COLS - 1, camera_tile_x + VIEWPORT_COLS - 1);
+            else if (dx < 0) draw_column(VIEWPORT_COL_OFFSET, camera_tile_x);
         }
     }
 }

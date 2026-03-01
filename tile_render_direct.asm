@@ -355,6 +355,10 @@ _svr_count:
 ; Shift viewport up by 1 char row (8 pixels). Copies char rows 1..15
 ; to rows 0..14, top-to-bottom. Caller draws new bottom row (row 15).
 ; Uses SP trick for source addresses, IX for dest addresses.
+; IX is saved/restored because SDCC uses it as the frame pointer
+; (sdcc_iy calling convention). Without this, returning with a
+; clobbered IX causes the caller's (ix-N) local variable accesses
+; to read/write into the screen address table instead of the stack.
 ;
 ; void shift_viewport_up(void)
 ;
@@ -362,6 +366,7 @@ _svr_count:
 ;----------------------------------------------------------------------
 _shift_viewport_up:
     di
+    push ix                         ; save SDCC frame pointer
     ld (_svu_save_sp+1), sp
     ; Source = char row 1 onward (table entry 8 = 16 bytes offset)
     ld sp, _scr_addr_table_direct + 16
@@ -396,6 +401,7 @@ _svu_scanline:
 
 _svu_save_sp:
     ld sp, 0                        ; self-mod patched
+    pop ix                          ; restore SDCC frame pointer
     ei
     ret
 
@@ -408,6 +414,8 @@ _svu_count:
 ; to rows 1..15, bottom-to-top. Caller draws new top row (row 0).
 ; Uses IX for source addresses (walking backward), dest = source + 16
 ; bytes in table (8 entries later).
+; IX is saved/restored because SDCC uses it as the frame pointer
+; (sdcc_iy calling convention). See shift_viewport_up comment.
 ;
 ; void shift_viewport_down(void)
 ;
@@ -415,6 +423,7 @@ _svu_count:
 ;----------------------------------------------------------------------
 _shift_viewport_down:
     di
+    push ix                         ; save SDCC frame pointer
     ; Start from bottom: source entry 119 (char row 14 scanline 7)
     ; dest is always source + 8 entries = +16 bytes in table
     ld ix, _scr_addr_table_direct + 119 * 2
@@ -447,6 +456,7 @@ _svd_scanline:
     ld (_svd_count), a              ; 13T
     jp nz, _svd_scanline            ; 10T
 
+    pop ix                          ; restore SDCC frame pointer
     ei
     ret
 
@@ -570,7 +580,7 @@ _rdr_scr_base:
 ; T-states: ~170,000 (~2.4 frames). Run with interrupts disabled at startup.
 ;----------------------------------------------------------------------
 _render_full_viewport:
-    ; Read map_top_left from stack
+    ; Read map_top_left from stack (before push ix changes SP)
     ld hl, 2
     add hl, sp
     ld e, (hl)
@@ -580,6 +590,7 @@ _render_full_viewport:
     ; Save map pointer
     ld (_rfv_map_ptr), de
 
+    push ix                 ; save SDCC frame pointer
     di
 
     ; Alt regs: D' = TILE_PAGE, E' = in_tile_y
@@ -653,6 +664,7 @@ _rfv_scanline:
     dec c                   ; next char row
     jp nz, _rfv_scanline    ; loop for 16 char rows
 
+    pop ix                  ; restore SDCC frame pointer
     ei
     ret
 

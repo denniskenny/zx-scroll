@@ -39,11 +39,17 @@ A simple tilemap scroller for the ZX Spectrum, written in C using Z88DK.
 
 Build configs live under `config/*.mk` and can define:
 
-- `MAP_CSV`
-- `TILES_ZXP`
-- `MAP_WIDTH_TILES`, `MAP_HEIGHT_TILES`
-- `TILE_WIDTH_PX`, `TILE_HEIGHT_PX`
+- `MAP_CSV` - path to a CSV tilemap (plain CSV or extracted from TMX)
+- `TILES_ZXP` - path to the tileset `.zxp` file
+- `MAP_WIDTH_TILES`, `MAP_HEIGHT_TILES` - map dimensions in tiles
+- `TILE_WIDTH_PX`, `TILE_HEIGHT_PX` - tile dimensions in pixels
 - `USER_CFLAGS` (optional)
+
+### TMX map support
+
+Tiled `.tmx` files with CSV-encoded layer data can be used as map sources.
+The makefile extracts the CSV from the TMX using `sed` and feeds it into the
+existing `generate_map` pipeline. See the `maze` target for an example.
 
 ### Offscreen buffer placement
 
@@ -165,6 +171,11 @@ Build default sample game:
 
 Build using a different config:
 `make CONFIG_MK=config/basic_game.mk`
+
+Build with the 16maze TMX map:
+`make maze`
+
+This extracts CSV from `assets/16maze.tmx` and builds `scroll.tap` with a 32x32 tile map.
 
 Run in Fuse:
 `make run CONFIG_MK=config/basic_config.mk`
